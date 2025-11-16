@@ -9,6 +9,7 @@ import android.os.Bundle;
 import android.view.View;
 import android.widget.Button;
 import android.widget.GridView;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -32,9 +33,23 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
     private MatrixAdapter matrixAdapter;
     private TextView txtJson;
     private TextView txtStatus;
+    // --- Botones Menú Principal (Idle) ---
     private Button cmdEditar;
     private Button cmdReproducir;
+    private LinearLayout menuPrincipalLayout;
+    // --- Botones Menú Edición ---
+    private Button cmdPlayCell;
+    private Button cmdSave;
+    private Button cmdBackToMenu;
+    private LinearLayout menuEdicionLayout;
     // ----------------------------
+
+    // --- Gestión de Estado y Selección ---
+    private enum AppState { IDLE, EDITING }
+    private AppState currentState = AppState.IDLE;
+    private int selectedRow = -1;
+    private int selectedCol = -1;
+    // ------------------------------------
 
     // --- MQTT y BroadcastReceiver ---
     private MqttHandler mqttHandler;
@@ -52,14 +67,26 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
         // --- Vinculación de Vistas ---
         txtJson = findViewById(R.id.txtJson);
         txtStatus = findViewById(R.id.txtStatus);
+        matrixGridView = findViewById(R.id.matrixGridView);
+
+        // Vistas del menú principal
         cmdEditar = findViewById(R.id.cmdEditar);
         cmdReproducir = findViewById(R.id.cmdReproducir);
-        matrixGridView = findViewById(R.id.matrixGridView);
+        menuPrincipalLayout = findViewById(R.id.menuPrincipalLayout); // Asume que tienes un LinearLayout con este ID
+
+        // Vistas del menú de edición
+        cmdPlayCell = findViewById(R.id.cmdPlayCell); // Asume que tienes este botón en tu layout
+        cmdSave = findViewById(R.id.cmdSave);         // Asume que tienes este botón en tu layout
+        cmdBackToMenu = findViewById(R.id.cmdBackToMenu); // Asume que tienes este botón en tu layout
+        menuEdicionLayout = findViewById(R.id.menuEdicionLayout); // Asume que tienes un LinearLayout con este ID
         // ------------------------------
 
         // --- Configuración de Listeners ---
         cmdEditar.setOnClickListener(botonesListeners);
         cmdReproducir.setOnClickListener(botonesListeners);
+        cmdPlayCell.setOnClickListener(botonesListeners);
+        cmdSave.setOnClickListener(botonesListeners);
+        cmdBackToMenu.setOnClickListener(botonesListeners);
         // ----------------------------------
 
         // --- Lógica de la Matriz ---
@@ -67,6 +94,10 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
         // Se crea el adapter, pasando 'this' como el listener para que la actividad reciba los eventos
         matrixAdapter = new MatrixAdapter(this, matrixVals, this);
         matrixGridView.setAdapter(matrixAdapter);
+        // ---------------------------
+
+        // --- Estado Inicial de la UI ---
+        updateUIVisibility();
         // ---------------------------
 
         // --- Conexión MQTT y Configuración de Receivers ---
@@ -77,27 +108,42 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
     }
 
     /**
-     * Este método es OBLIGATORIO porque lo exige la interfaz OnCellEditListener.
-     * Se ejecuta automáticamente cada vez que una celda de la matriz es editada.
+     * Actualiza la visibilidad de los menús según el estado actual de la app.
+     */
+    private void updateUIVisibility() {
+        if (currentState == AppState.IDLE) {
+            menuPrincipalLayout.setVisibility(View.VISIBLE);
+            menuEdicionLayout.setVisibility(View.GONE);
+            matrixAdapter.setSelection(-1, -1); // Deseleccionar celda
+            selectedRow = -1;
+            selectedCol = -1;
+        } else { // EDITING
+            menuPrincipalLayout.setVisibility(View.GONE);
+            menuEdicionLayout.setVisibility(View.VISIBLE);
+        }
+    }
+
+
+    /**
+     * Este método es llamado por el Adapter cada vez que una celda es presionada.
+     * En modo IDLE, selecciona la celda.
+     * En modo EDITING, permite cambiar su valor.
      * @param row Fila de la celda modificada.
      * @param col Columna de la celda modificada.
-     * @param value El nuevo valor numérico de la celda.
+     * @param value El nuevo valor numérico de la celda (si se cambió).
      */
     @Override
     public void onCellEdited(int row, int col, int value) {
-        JSONObject payload = new JSONObject();
-        try {
-            // Creamos un JSON con la información precisa del cambio
-            payload.put("row", row);
-            payload.put("col", col);
-            payload.put("value", value);
-
-            // Publicamos el mensaje en el tópico dedicado a la matriz
-            publishMessage(ConfigMQTT.topicEdit, payload.toString());
-
-        } catch (JSONException e) {
-            e.printStackTrace();
-            Toast.makeText(this, "Error al crear JSON", Toast.LENGTH_SHORT).show();
+        if (currentState == AppState.IDLE) {
+            // En modo IDLE, solo seleccionamos la celda
+            selectedRow = row;
+            selectedCol = col;
+            matrixAdapter.setSelection(row, col); // Resaltar visualmente la celda
+            Toast.makeText(this, "Celda (" + row + ", " + col + ") seleccionada. Presiona EDITAR.", Toast.LENGTH_SHORT).show();
+        } else { // EDITING
+            // En modo EDITING, el valor ya se actualizó en la matriz localmente por el Adapter
+            // No publicamos aquí, esperamos al botón "Guardar"
+            Toast.makeText(this, "Valor de la celda cambiado a: " + value, Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -164,11 +210,45 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
     private final View.OnClickListener botonesListeners = new View.OnClickListener() {
         @Override
         public void onClick(View view) {
-            int id = view.getId();
-            if (id == R.id.cmdEditar) {
-                publishMessage(ConfigMQTT.topicState, "Edit");
-            } else if (id == R.id.cmdReproducir) {
+            // --- Lógica del Menú Principal ---
+            if (view.getId() == R.id.cmdEditar) {
+                if (selectedRow != -1 && selectedCol != -1) {
+                    currentState = AppState.EDITING;
+                    matrixAdapter.setEditing(true); // Habilita la edición en el adapter
+                    updateUIVisibility();
+                    publishMessage(ConfigMQTT.topicState, "Edit");
+                } else {
+                    Toast.makeText(MainActivity.this, "Por favor, seleccione una celda primero", Toast.LENGTH_SHORT).show();
+                }
+            } else if (view.getId() == R.id.cmdReproducir) {
                 publishMessage(ConfigMQTT.topicState, "PlayAll");
+            }
+
+            // --- Lógica del Menú de Edición ---
+            else if (view.getId() == R.id.cmdPlayCell) {
+                if (selectedRow != -1) {
+                    publishMessage(ConfigMQTT.topicState, "PlayCell");
+                }
+            } else if (view.getId() == R.id.cmdSave) {
+                if (selectedRow != -1 && selectedCol != -1) {
+                    int valueToSave = matrixVals[selectedRow][selectedCol];
+                    JSONObject payload = new JSONObject();
+                    try {
+                        payload.put("row", selectedRow);
+                        payload.put("col", selectedCol);
+                        payload.put("value", valueToSave);
+                        // Publicamos el mensaje en el tópico dedicado a la matriz
+                        publishMessage(ConfigMQTT.topicEdit, payload.toString());
+                    } catch (JSONException e) {
+                        e.printStackTrace();
+                        Toast.makeText(MainActivity.this, "Error al crear JSON para guardar", Toast.LENGTH_SHORT).show();
+                    }
+                }
+            } else if (view.getId() == R.id.cmdBackToMenu) {
+                currentState = AppState.IDLE;
+                matrixAdapter.setEditing(false); // Deshabilita la edición en el adapter
+                updateUIVisibility();
+                publishMessage(ConfigMQTT.topicState, "Idle");
             }
         }
     };

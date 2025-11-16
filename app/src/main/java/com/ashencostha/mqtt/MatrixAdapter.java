@@ -1,46 +1,81 @@
 package com.ashencostha.mqtt;
 
 import android.content.Context;
-import android.text.Editable;import android.text.TextWatcher;
-import android.view.LayoutInflater;
-import android.view.View;
+import android.graphics.Color; // <-- Correct Color class
+import android.view.LayoutInflater;import android.view.View;
 import android.view.ViewGroup;
 import android.widget.BaseAdapter;
-import android.widget.EditText;
+import android.widget.Button;
 
 public class MatrixAdapter extends BaseAdapter {
 
+    // --- Member Variables ---
+    private final Context context;
+    private final int[][] matrix;
+    private final OnCellEditListener listener;
+
+    private int selectedRow = -1;
+    private int selectedCol = -1;
+    private boolean isEditing = false;
+    // ------------------------
+
     /**
-     * Interfaz de comunicación. Define un contrato que MainActivity debe cumplir.
-     * Permite que el Adapter notifique a la Activity sin conocerla directamente (buena práctica).
+     * Listener interface to communicate events back to the Activity.
      */
     public interface OnCellEditListener {
         void onCellEdited(int row, int col, int value);
     }
 
-    private final Context context;
-    private final int[][] matrix;
-    private final OnCellEditListener listener; // Referencia a la clase que implementa la interfaz (MainActivity)
-    private final int ROWS;
-    private final int COLS;
-
+    /**
+     * Constructor for the adapter.
+     * @param context The application context.
+     * @param matrix The 2D array holding the matrix data.
+     * @param listener The listener to be notified of cell events.
+     */
     public MatrixAdapter(Context context, int[][] matrix, OnCellEditListener listener) {
         this.context = context;
         this.matrix = matrix;
-        this.listener = listener; // Guardamos la referencia a MainActivity
-        this.ROWS = matrix.length;
-        this.COLS = matrix[0].length;
+        this.listener = listener;
     }
+
+    // --- New methods for state management ---
+
+    /**
+     * Sets the currently selected cell to be highlighted.
+     * @param row The selected row.
+     * @param col The selected column.
+     */
+    public void setSelection(int row, int col) {
+        selectedRow = row;
+        selectedCol = col;
+        notifyDataSetChanged(); // Redraws the grid to apply the highlight.
+    }
+
+    /**
+     * Enables or disables the editing mode.
+     * @param editing True to enable editing, false to disable.
+     */
+    public void setEditing(boolean editing) {
+        isEditing = editing;
+        // When we exit edit mode, clear the visual selection.
+        if (!editing) {
+            setSelection(-1, -1);
+        }
+    }
+    // ----------------------------------------
+
 
     @Override
     public int getCount() {
-        return ROWS * COLS; // El número total de celdas
+        // The total number of cells is ROWS * COLS
+        if (matrix == null || matrix.length == 0) return 0;
+        return matrix.length * matrix[0].length;
     }
 
     @Override
     public Object getItem(int position) {
-        int row = position / COLS;
-        int col = position % COLS;
+        int row = position / matrix[0].length;
+        int col = position % matrix[0].length;
         return matrix[row][col];
     }
 
@@ -51,75 +86,47 @@ public class MatrixAdapter extends BaseAdapter {
 
     @Override
     public View getView(int position, View convertView, ViewGroup parent) {
-        final EditText editText;
+        Button button;
 
-        // Patrón ViewHolder para reutilizar vistas y mejorar el rendimiento
         if (convertView == null) {
-            // Si la vista no existe, la "inflamos" desde nuestro layout grid_item.xml
-            convertView = LayoutInflater.from(context).inflate(R.layout.grid_item, parent, false);
-            editText = convertView.findViewById(R.id.grid_item_value);
-            convertView.setTag(new ViewHolder(editText));
+            // If it's not recycled, inflate a new view.
+            // We assume you have a layout file `grid_item.xml` with just a Button.
+            LayoutInflater inflater = (LayoutInflater) context.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
+            convertView = inflater.inflate(R.layout.grid_item, parent, false);
+        }
+
+        button = (Button) convertView;
+
+        // Get row and column from the 1D position
+        final int numCols = matrix[0].length;
+        final int row = position / numCols;
+        final int col = position % numCols;
+
+        // Set the button's text to the value from the matrix
+        button.setText(String.valueOf(matrix[row][col]));
+
+        // --- Block for Highlighting ---
+        if (row == selectedRow && col == selectedCol) {
+            button.setBackgroundColor(Color.CYAN); // Highlight color for the selected cell
         } else {
-            // Si la vista ya existe, la reutilizamos
-            ViewHolder holder = (ViewHolder) convertView.getTag();
-            editText = holder.editText;
+            button.setBackgroundColor(Color.LTGRAY); // Default cell color
         }
+        // ------------------------------
 
-        // Obtenemos el TextWatcher antiguo para removerlo y evitar llamadas múltiples
-        TextWatcher oldWatcher = (TextWatcher) editText.getTag(R.id.grid_item_value);
-        if (oldWatcher != null) {
-            editText.removeTextChangedListener(oldWatcher);
-        }
-
-        // Calculamos la fila y columna a partir de la posición lineal
-        final int row = position / COLS;
-        final int col = position % COLS;
-
-        // Establecemos el valor actual de la celda en el EditText
-        editText.setText(String.valueOf(matrix[row][col]));
-
-        // Creamos un nuevo listener para detectar cambios en el texto
-        TextWatcher newWatcher = new TextWatcher() {
-            @Override
-            public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
-
-            @Override
-            public void onTextChanged(CharSequence s, int start, int before, int count) {}
-
-            @Override
-            public void afterTextChanged(Editable s) {
-                try {
-                    // Cuando el texto cambia, intentamos convertirlo a un número
-                    int newValue = Integer.parseInt(s.toString());
-
-                    // Comprobamos si el valor realmente cambió para evitar publicaciones innecesarias
-                    if (matrix[row][col] != newValue) {
-                        matrix[row][col] = newValue; // Actualizamos el valor en nuestro array de datos
-
-                        // Usamos la interfaz para notificar a MainActivity sobre el cambio
-                        if (listener != null) {
-                            listener.onCellEdited(row, col, newValue);
-                        }
-                    }
-                } catch (NumberFormatException e) {
-                    // Si el usuario borra el texto o introduce algo inválido, no hacemos nada o asignamos 0
-                }
+        // --- OnClickListener for the cell ---
+        button.setOnClickListener(v -> {
+            // If in editing mode, increment the cell's value
+            if (isEditing) {
+                // Increment value logic (e.g., cycles from 0 to 127)
+                matrix[row][col] = (matrix[row][col] + 1) % 128;
+                button.setText(String.valueOf(matrix[row][col]));
             }
-        };
-
-        editText.addTextChangedListener(newWatcher);
-        // Guardamos el nuevo watcher en un tag para poder quitarlo la próxima vez que se reutilice la vista
-        editText.setTag(R.id.grid_item_value, newWatcher);
+            // Always notify the listener, whether for selection (in IDLE mode) or for editing.
+            if (listener != null) {
+                listener.onCellEdited(row, col, matrix[row][col]);
+            }
+        });
 
         return convertView;
-    }
-
-    // Clase ViewHolder para almacenar las vistas y mejorar el rendimiento de la GridView
-    private static class ViewHolder {
-        final EditText editText;
-
-        ViewHolder(EditText editText) {
-            this.editText = editText;
-        }
     }
 }

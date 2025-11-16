@@ -1,69 +1,82 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
+    android:layout_width="match_parent"    android:layout_height="match_parent"
+    android:orientation="vertical"
     android:padding="16dp"
     tools:context=".MainActivity">
 
-    <!-- Componentes de la parte superior -->
     <TextView
         android:id="@+id/txtStatus"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Idle"
-        android:textSize="48sp"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
+        android:text="Status: --"
+        android:textSize="18sp" />
 
     <TextView
         android:id="@+id/txtJson"
-        android:layout_width="0dp"
+        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:ellipsize="end"
-        android:maxLines="2"
-        android:text="Último mensaje recibido..."
-        android:textColor="@android:color/darker_gray"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/txtStatus" />
+        android:text="Last MQTT Msg: --" />
 
-    <!-- GridView para la Matriz -->
     <GridView
         android:id="@+id/matrixGridView"
-        android:layout_width="0dp"
+        android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_marginTop="16dp"
-        android:layout_marginBottom="16dp"
-        android:gravity="center"
-        android:horizontalSpacing="4dp"
+        android:layout_weight="1"
         android:numColumns="4"
         android:verticalSpacing="4dp"
-        app:layout_constraintBottom_toTopOf="@id/cmdEditar"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/txtJson" />
+        android:horizontalSpacing="4dp"
+        android:layout_marginTop="16dp" />
 
-    <!-- Botones de Control en la parte inferior -->
-    <Button
-        android:id="@+id/cmdEditar"
-        android:layout_width="wrap_content"
+    <!-- Menú Principal -->
+    <LinearLayout
+        android:id="@+id/menuPrincipalLayout"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Editar"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toStartOf="@id/cmdReproducir"
-        app:layout_constraintHorizontal_chainStyle="spread"
-        app:layout_constraintStart_toStartOf="parent" />
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:visibility="visible">
 
-    <Button
-        android:id="@+id/cmdReproducir"
-        android:layout_width="wrap_content"
+        <Button
+            android:id="@+id/cmdEditar"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Editar" />
+
+        <Button
+            android:id="@+id/cmdReproducir"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Reproducir Todo" />
+    </LinearLayout>
+
+    <!-- Menú de Edición -->
+    <LinearLayout
+        android:id="@+id/menuEdicionLayout"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Reproducir"
-        app:layout_constraintBottom_toBottomOf="@id/cmdEditar"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toEndOf="@id/cmdEditar" />
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:visibility="gone">
 
-</androidx.constraintlayout.widget.ConstraintLayout>
+        <Button
+            android:id="@+id/cmdPlayCell"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Play Cell" />
+
+        <Button
+            android:id="@+id/cmdSave"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Guardar" />
+
+        <Button
+            android:id="@+id/cmdBackToMenu"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Volver" />
+    </LinearLayout>
+
+</LinearLayout>
