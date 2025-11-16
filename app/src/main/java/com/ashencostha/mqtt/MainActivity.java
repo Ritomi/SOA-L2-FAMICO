@@ -119,7 +119,7 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
         // Damos un tiempo prudencial para que se establezca la conexión antes de suscribir
         try {
             Thread.sleep(1000);
-            subscribeToTopic(ConfigMQTT.topicTemp);
+            subscribeToTopic(ConfigMQTT.topicStatus);
         } catch (InterruptedException e) {
             e.printStackTrace();
         }
@@ -166,9 +166,9 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
         public void onClick(View view) {
             int id = view.getId();
             if (id == R.id.cmdEditar) {
-                publishMessage(ConfigMQTT.topicLuz, "0"); // Asumo que esto es para apagar una luz
+                publishMessage(ConfigMQTT.topicState, "Edit");
             } else if (id == R.id.cmdReproducir) {
-                publishMessage(ConfigMQTT.topicLuz, "1"); // Y esto para encenderla
+                publishMessage(ConfigMQTT.topicState, "PlayAll");
             }
         }
     };
@@ -193,7 +193,7 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
                 txtJson.setText(String.format("Tópico: %s, Mensaje: %s", topic, msgJson));
 
                 try {
-                    // Aquí procesas los mensajes que llegan, como el de la temperatura
+                    // Aquí procesas los mensajes que llegan
                     if (topic != null && topic.equals(ConfigMQTT.topicStatus)) {
                         JSONObject jsonObject = new JSONObject(msgJson);
                         String value = jsonObject.getString("value");

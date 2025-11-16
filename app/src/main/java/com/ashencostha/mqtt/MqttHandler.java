@@ -20,8 +20,10 @@ public class MqttHandler implements MqttCallback {
     public static final String USER="BBUS-Z1MN1sGYdyPI8Mut0NahTzna5JVrBn";
     public static final String PASS="BBUS-Z1MN1sGYdyPI8Mut0NahTzna5JVrBn";
 
-    public static final String TOPIC_LUZ = "/v1.6/devices/casa/luz";
-    public static final String TOPIC_TEMPERATURA      = "/v1.6/devices/casa/temperatura";
+    public static final String TOPIC_STATUS = "/v1.6/devices/simulator/status";
+    public static final String TOPIC_STATE = "/v1.6/devices/simulator/state";
+    public static final String TOPIC_TEMPO = "/v1.6/devices/simulator/tempo";
+    public static final String TOPIC_EDIT = "/v1.6/devices/simulator/edit";
 
     public static final String ACTION_DATA_RECEIVE ="com.example.intentservice.intent.action.DATA_RECEIVE";
     public static final String ACTION_CONNECTION_LOST ="com.example.intentservice.intent.action.CONNECTION_LOST";
