@@ -10,13 +10,11 @@ public class HelpActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_help);
 
-        // Opcional: ocultar action bar si querés una pantalla más limpia
         if (getSupportActionBar() != null) {
             getSupportActionBar().setDisplayHomeAsUpEnabled(true); // muestra back arrow
         }
     }
 
-    // Si querés que el botón "back" del action bar haga finish():
     @Override
     public boolean onSupportNavigateUp() {
         finish();

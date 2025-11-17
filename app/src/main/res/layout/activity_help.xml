@@ -6,12 +6,34 @@
     android:layout_height="match_parent"
     android:padding="16dp">
 
+    <ImageView
+        android:id="@+id/ivSplashBg"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:src="@drawable/splash_bg2"
+        android:contentDescription="@string/splash_bg_desc"
+        android:scaleType="centerCrop"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"/>
+    <!-- Overlay/sombra para legibilidad -->
+    <!--View
+        android:id="@+id/overlay"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:background="#80000000"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"/ -->
+
     <TextView
         android:id="@+id/tvHelpTitle"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:text="Como funciona nuestra aplicacion?"
-        android:textSize="20sp"
+        android:textSize="30sp"
         android:textStyle="bold"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintStart_toStartOf="parent"
@@ -32,7 +54,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/help_content"
-            android:textSize="16sp"/>
+            android:textSize="21sp"/>
 
     </ScrollView>
 
