@@ -145,6 +145,15 @@ public class MatrixAdapter extends BaseAdapter {
             if (isEditing && row == selectedRow && col == selectedCol) {
                 try {
                     int newValue = s.length() > 0 ? Integer.parseInt(s.toString()) : 0;
+                    if(selectedCol == 0 && (newValue < 0 || newValue > 15)){
+                        Toast.makeText(context, "El valor debe estar entre 0 y 15", Toast.LENGTH_SHORT).show();
+                        s.replace(0, s.length(), String.valueOf(matrix[row][col]));
+                        return;
+                    }else if(selectedCol > 0 && (newValue < 0 || newValue > 127)){
+                        Toast.makeText(context, "El valor debe estar entre 0 y 127", Toast.LENGTH_SHORT).show();
+                        s.replace(0, s.length(), String.valueOf(matrix[row][col]));
+                        return;
+                    }
                     if (matrix[row][col] != newValue) {
                         matrix[row][col] = newValue;
                         if (listener != null) {
