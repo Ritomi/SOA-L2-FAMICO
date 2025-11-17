@@ -12,7 +12,7 @@
 
 const char* WIFI_SSID = "SO Avanzados";
 const char* WIFI_PASS = "SOA.2019";
-const char* MQTT_BROKER = "broker.hivemq.com";
+const char* MQTT_BROKER = "broker.emqx.io";
 const int   MQTT_PORT   = 1883;
 const char* MQTT_CLIENT_ID = "esp32_famico_sequencer";
 
@@ -20,10 +20,11 @@ WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 
 // Topics
-const char* TOPIC_STATUS = "simulator/status"; // publish
-const char* TOPIC_STATE  = "simulator/state";  // subscribe
-const char* TOPIC_TEMPO  = "simulator/tempo";  // subscribe (bpm o ms/step)
-const char* TOPIC_EDIT   = "simulator/edit";   // subscribe "r c v"
+const char* TOPIC_STATUS    = "simulator/status";   // publish
+const char* TOPIC_STATE     = "simulator/state";    // subscribe
+const char* TOPIC_TEMPO     = "simulator/tempo";    // subscribe (bpm o ms/step)
+const char* TOPIC_EDIT      = "simulator/edit";     // subscribe "r c v"
+const char* TOPIC_PLAY_ROW  = "simulator/playrow";  // subscribe "r" -> reproducir fila r
 
 // ================================
 //           TFT (ILI9341)
@@ -35,7 +36,7 @@ TFT_eSPI tft;
 constexpr int ROWS = 16;
 constexpr int COLS = 4;
 int matrixVals[ROWS][COLS];
-int scrollIndex = 0;    
+int scrollIndex = 0;
 constexpr int VISIBLE_ROWS = 6;
 
 // Layout de matriz
@@ -57,7 +58,6 @@ constexpr int HEADER_ICON_R = 9;
 // ================================
 //           ENCODERS
 // ================================
-
 // Encoder1 (PLAY / mover valores)
 #define ENC1_CLK 21
 #define ENC1_DT  22
@@ -68,10 +68,12 @@ constexpr int HEADER_ICON_R = 9;
 #define ENC2_SW   5
 
 volatile int selectedRow = 0;
-volatile int selectedCol = 0; 
+volatile int selectedCol = 0;
 
+// Tiempos de debounce / guard
 const unsigned long ENC_DEBOUNCE_MS = 6;
 const unsigned long ENC_GUARD_MS    = 18;
+const unsigned long BTN_DEBOUNCE_MS = 220;
 
 struct EncState {
   int  lastDir = 0;
@@ -82,7 +84,31 @@ struct EncState {
 };
 
 EncState enc1, enc2;
-const unsigned long BTN_DEBOUNCE_MS = 220;
+
+// ================================
+//           EVENTOS
+// ================================
+enum Event {
+  EV_ENC1_CW = 1,
+  EV_ENC1_CCW = 2,
+  EV_ENC1_PRESS = 3,
+  EV_ENC2_CW = 4,
+  EV_ENC2_CCW = 5,
+  EV_ENC2_PRESS = 6,
+};
+
+QueueHandle_t queueEvents = nullptr;
+TaskHandle_t  hInputTask  = nullptr;
+TaskHandle_t  hMqttTask   = nullptr;
+
+// Parámetros FreeRTOS
+constexpr int EVENT_QUEUE_LEN             = 16;
+constexpr uint16_t INPUT_TASK_STACK       = 4096;
+constexpr UBaseType_t INPUT_TASK_PRIO     = 2;
+constexpr uint16_t MQTT_TASK_STACK        = 4096;
+constexpr UBaseType_t MQTT_TASK_PRIO      = 1;
+constexpr TickType_t INPUT_TASK_PERIOD_MS = 2;
+constexpr TickType_t MQTT_TASK_PERIOD_MS  = 10;
 
 // ================================
 //           ESTADOS
@@ -108,10 +134,17 @@ static int step = 0;
 static int samplesPerStep = 0;
 
 // --- BPM editable ---
-static int BPM = 120;                          // variable
-static const int BPM_MIN = 20;
-static const int BPM_MAX = 300;
+static int BPM = 120;
+static const int BPM_MIN  = 20;
+static const int BPM_MAX  = 300;
 static const int BPM_STEP = 10;
+
+// Parámetros audio
+constexpr float MASTER_DRUMS   = 0.75f;
+constexpr float GAIN_NOISE     = 0.80f;
+constexpr float DECAY_NOISE    = 0.9950f;
+constexpr float MASTER_SYNTH   = 0.30f;
+constexpr size_t AUDIO_FRAMES  = 512;
 
 // NES NOISE
 static const uint16_t NES_NOISE_PERIOD[16] = {
@@ -131,7 +164,8 @@ struct NesNoise {
     return s < 1 ? 1 : s;
   }
   void setNote(int idx) {
-    if (idx < 0) idx = 0; if (idx > 15) idx = 15;
+    if (idx < 0) idx = 0;
+    if (idx > 15) idx = 15;
     stepSamples = periodToStepSamples(NES_NOISE_PERIOD[idx]);
   }
   void setShort(bool s) { shortMode = s; }
@@ -149,85 +183,41 @@ struct NesNoise {
 
 static NesNoise nNoise;
 static float    envNoise = 0.0f;
-static const float MASTER_DRUMS = 0.75f;
-static const float GAIN_NOISE   = 0.80f;
-static const float DECAY_NOISE  = 0.9950f;
 
-struct SqOsc { double phase=0, inc=0; float amp=0.12f;
+struct SqOsc {
+  double phase=0, inc=0;
+  float amp=0.12f;
   void setFreq(float f){ inc = (f<=0)?0.0:(double)f/I2S_SR; }
-  float tick(){ if(inc==0) return 0; float frac=float(phase-(uint32_t)phase);
-    float s = (frac<0.5f)?+1.0f:-1.0f; phase+=inc; if(phase>=1.0) phase-=1.0; return s*amp; }
+  float tick(){
+    if(inc==0) return 0;
+    float frac=float(phase-(uint32_t)phase);
+    float s = (frac<0.5f)?+1.0f:-1.0f;
+    phase+=inc;
+    if(phase>=1.0) phase-=1.0;
+    return s*amp;
+  }
 };
-struct TriOsc{ double phase=0, inc=0; float amp=0.12f;
+
+struct TriOsc{
+  double phase=0, inc=0;
+  float amp=0.12f;
   void setFreq(float f){ inc = (f<=0)?0.0:(double)f/I2S_SR; }
-  float tick(){ if(inc==0) return 0; double p=phase; float y=(p<0.5)?(float)(-1+4*p):(float)(3-4*p);
-    phase+=inc; if(phase>=1.0) phase-=1.0; return y*amp; }
+  float tick(){
+    if(inc==0) return 0;
+    double p=phase;
+    float y=(p<0.5)?(float)(-1+4*p):(float)(3-4*p);
+    phase+=inc;
+    if(phase>=1.0) phase-=1.0;
+    return y*amp;
+  }
 };
+
 static SqOsc  sq1, sq2;
 static TriOsc tri;
-static const float MASTER_SYNTH = 0.30f;
-
-// ================================
-//         HELPERS DE AUDIO
-// ================================
-static inline float midiToHz(uint8_t midi) {
-  if (midi == 0) return 0.0f;
-  if (midi > 127) midi = 127;
-  return 440.0f * powf(2.0f, ((int)midi - 69) / 12.0f);
-}
-
-static inline void recalcSamplesPerStep() {
-  samplesPerStep = (int)roundf(I2S_SR * 60.0f / (BPM * 4.0f)); // 4 steps por beat
-}
-
-void triggerStep(int s) {
-  int dval = matrixVals[s][0] & 0x0F;
-  // Presets DRUM
-  enum DrumType : uint8_t { DR_NONE=0, DR_HAT=1, DR_SNARE=2, DR_KICK=3 };
-  struct DrumPreset { DrumType type; uint8_t periodIdx; bool shortMode; };
-  static const DrumPreset DRUM_PRESET[16] = {
-    {DR_NONE,0,true},{DR_HAT,0,true},{DR_HAT,2,true},{DR_HAT,4,true},
-    {DR_SNARE,8,false},{DR_SNARE,10,false},{DR_SNARE,12,false},{DR_KICK,15,false},
-    {DR_KICK,14,false},{DR_KICK,13,false},{DR_HAT,1,true},{DR_SNARE,9,false},
-    {DR_HAT,3,true},{DR_SNARE,11,false},{DR_KICK,15,false},{DR_HAT,5,true},
-  };
-  const DrumPreset& P = DRUM_PRESET[dval];
-  if (P.type != DR_NONE) { envNoise = 1.0f; nNoise.setShort(P.shortMode); nNoise.setNote(P.periodIdx); }
-  sq1.setFreq(midiToHz((uint8_t)matrixVals[s][1]));
-  sq2.setFreq(midiToHz((uint8_t)matrixVals[s][2]));
-  tri.setFreq(midiToHz((uint8_t)matrixVals[s][3]));
-}
-
-static void i2sWriteStereoSamples(const int16_t* data, size_t frames) {
-  size_t wr = 0;
-  i2s_write(I2S_PORT, (const char*)data, frames * 2 * sizeof(int16_t), &wr, portMAX_DELAY);
-}
-
-static void i2sInit() {
-  i2s_config_t cfg = {
-    .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
-    .sample_rate = I2S_SR,
-    .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-    .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
-    .communication_format = I2S_COMM_FORMAT_I2S,
-    .intr_alloc_flags = 0,
-    .dma_buf_count = 12,
-    .dma_buf_len = 512,
-    .use_apll = true,
-    .tx_desc_auto_clear = true,
-    .fixed_mclk = 0
-  };
-  i2s_pin_config_t pins = { .bck_io_num=PIN_BCLK, .ws_io_num=PIN_LRCK, .data_out_num=PIN_DOUT, .data_in_num=I2S_PIN_NO_CHANGE };
-  i2s_driver_install(I2S_PORT, &cfg, 0, NULL);
-  i2s_set_pin(I2S_PORT, &pins);
-  i2s_set_clk(I2S_PORT, I2S_SR, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_STEREO);
-}
 
 // ================================
 //           DIBUJO TFT
 // ================================
-
-// --- Status box geometry (lo uso para dibujar cursor BPM) ---
 constexpr int STATUS_W = 92;
 constexpr int STATUS_H = 27;
 constexpr int STATUS_X_PAD = 4;
@@ -240,33 +230,44 @@ void drawHeader() {
   tft.fillScreen(TFT_BLACK);
   tft.drawRect(0, 0, tft.width(), tft.height(), TFT_DARKGREY);
 
-  // Título grande
   tft.setTextFont(4);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.drawCentreString("FAMICO", tft.width()/2, 4, 4);
 
-  // Marco de la zona de grilla
   tft.drawRoundRect(6, 52, tft.width()-12, tft.height()-60, 8, TFT_SKYBLUE);
 
-  // Íconos de columnas
   drawColumnHeaders();
 }
 
 void drawColIcon(int c, int cx, int cy) {
   switch (c) {
-    case 0: tft.fillCircle(cx, cy, HEADER_ICON_R, TFT_YELLOW);
-            tft.drawCircle(cx, cy, HEADER_ICON_R, TFT_DARKGREY);
-            tft.fillCircle(cx-3, cy-2, 1, TFT_BLACK);
-            tft.fillCircle(cx+3, cy-2, 1, TFT_BLACK);
-            tft.drawLine(cx-5, cy+2, cx+5, cy+2, TFT_BLACK); break;
-    case 1: { int s = HEADER_ICON_R*2-2; tft.fillRect(cx-s/2, cy-s/2, s, s, TFT_CYAN);
-              tft.drawRect(cx-s/2, cy-s/2, s, s, TFT_DARKGREY); } break;
-    case 2: { int s = HEADER_ICON_R*2-2; tft.fillRect(cx-s/2, cy-s/2, s, s, TFT_GREEN);
-              tft.drawRect(cx-s/2, cy-s/2, s, s, TFT_DARKGREEN);
-              tft.fillRect(cx-3, cy-2, 2, 2, TFT_BLACK);
-              tft.fillRect(cx+1, cy-2, 2, 2, TFT_BLACK); } break;
-    case 3: { int r=HEADER_ICON_R+1; tft.fillTriangle(cx, cy-r, cx-r, cy+r-2, cx+r, cy+r-2, TFT_ORANGE);
-              tft.drawTriangle(cx, cy-r, cx-r, cy+r-2, cx+r, cy+r-2, TFT_DARKGREY); } break;
+    case 0:
+      tft.fillCircle(cx, cy, HEADER_ICON_R, TFT_YELLOW);
+      tft.drawCircle(cx, cy, HEADER_ICON_R, TFT_DARKGREY);
+      tft.fillCircle(cx-3, cy-2, 1, TFT_BLACK);
+      tft.fillCircle(cx+3, cy-2, 1, TFT_BLACK);
+      tft.drawLine(cx-5, cy+2, cx+5, cy+2, TFT_BLACK);
+      break;
+    case 1: {
+      int s = HEADER_ICON_R*2-2;
+      tft.fillRect(cx-s/2, cy-s/2, s, s, TFT_CYAN);
+      tft.drawRect(cx-s/2, cy-s/2, s, s, TFT_DARKGREY);
+      break;
+    }
+    case 2: {
+      int s = HEADER_ICON_R*2-2;
+      tft.fillRect(cx-s/2, cy-s/2, s, s, TFT_GREEN);
+      tft.drawRect(cx-s/2, cy-s/2, s, s, TFT_DARKGREEN);
+      tft.fillRect(cx-3, cy-2, 2, 2, TFT_BLACK);
+      tft.fillRect(cx+1, cy-2, 2, 2, TFT_BLACK);
+      break;
+    }
+    case 3: {
+      int r=HEADER_ICON_R+1;
+      tft.fillTriangle(cx, cy-r, cx-r, cy+r-2, cx+r, cy+r-2, TFT_ORANGE);
+      tft.drawTriangle(cx, cy-r, cx-r, cy+r-2, cx+r, cy+r-2, TFT_DARKGREY);
+      break;
+    }
   }
 }
 
@@ -277,7 +278,6 @@ void drawColumnHeaders() {
   }
 }
 
-// Área del riel se ajusta a la grilla visible
 void drawScrollBar() {
   const int railX = tft.width() - 10;
   const int railY = MATRIX_Y0;
@@ -314,7 +314,6 @@ void drawMatrixRow(int rowIndex, bool rowHighlighted) {
     tft.drawCentreString(String(matrixVals[rowIndex][c]), x + (CELL_W/2) - 1, y + 3, 2);
   }
 
-  // columna de índice de step
   int xStep = MATRIX_X0 + COLS * (CELL_W + CELL_GAP_X);
   uint16_t bgStep = rowHighlighted ? TFT_DARKGREEN : TFT_BLACK;
   uint16_t fgStep = rowHighlighted ? TFT_WHITE : TFT_SILVER;
@@ -324,11 +323,8 @@ void drawMatrixRow(int rowIndex, bool rowHighlighted) {
   tft.drawCentreString(String(rowIndex), xStep + (STEP_COL_W/2) - 1, y + STEP_COL_PADY, 2);
 }
 
-// Cursor de edición (rectángulo sobre la celda actual)
 void drawEditCursor(bool on) {
-  // si estoy “en BPM”, no dibujar cursor de celda
-  // (se dibuja marco del status box aparte)
-  if (selectedCol == COLS) return;             // BPM como “columna virtual”
+  if (selectedCol == COLS) return;
   if (gState != EDIT && gState != PLAY_LINE) return;
   if (selectedRow < scrollIndex || selectedRow >= scrollIndex + VISIBLE_ROWS) return;
 
@@ -338,7 +334,7 @@ void drawEditCursor(bool on) {
   tft.drawRect(x+2, y+2, CELL_W-6, CELL_H-6, col);
 }
 
-void drawBpmCursor(bool on) {                    // marco del BPM arriba a la derecha
+void drawBpmCursor(bool on) {
   uint16_t col = on ? TFT_ORANGE : TFT_BLACK;
   int x = statusBoxX(), y = statusBoxY();
   tft.drawRect(x-1, y-1, STATUS_W+2, STATUS_H+2, col);
@@ -356,16 +352,13 @@ void redrawVisibleWindow(bool sequencerHighlight) {
     } else {
       if (gState == IDLE || gState == PLAY_ALL) {
         hl = (rowIndex == selectedRow);
-      } else {
-        hl = false;
       }
     }
     drawMatrixRow(rowIndex, hl);
   }
   drawScrollBar();
-  drawEditCursor(true); // si aplica
+  drawEditCursor(true);
 
-  // si “columna” BPM está seleccionada, resalto el status box
   if ((gState == EDIT || gState == PLAY_LINE) && selectedCol == COLS) {
     drawBpmCursor(true);
   } else {
@@ -385,7 +378,6 @@ void updateHighlight(int prev, int cur, bool sequencerHighlight) {
   drawEditCursor(true);
 }
 
-// --- Status box ---
 void drawStatus() {
   const int boxX = statusBoxX();
   const int boxY = statusBoxY();
@@ -401,12 +393,15 @@ void drawStatus() {
   uint8_t oldDatum = tft.getTextDatum();
   tft.setTextDatum(TR_DATUM);
 
-  const char* modeTxt = (gState==IDLE)?"IDLE":(gState==EDIT)?"EDIT":(gState==PLAY_ALL)?"PLAY_ALL":"PLAY_LINE";
+  const char* modeTxt =
+    (gState==IDLE)     ? "IDLE" :
+    (gState==EDIT)     ? "EDIT" :
+    (gState==PLAY_ALL) ? "PLAY_ALL" :
+                         "PLAY_LINE";
   tft.drawString(modeTxt, boxX + boxW - 1, boxY + 0, 1);
   tft.drawString(String("BPM ")+String(BPM), boxX + boxW - 1, boxY + 9, 1);
 
   if (gState==EDIT || gState==PLAY_LINE) {
-    // Si la “columna” activa es BPM, resalto C BPM y marco
     if (selectedCol == COLS) {
       tft.setTextColor(TFT_ORANGE, TFT_BLACK);
       tft.drawString("C BPM", boxX + boxW - 1, boxY + 18, 1);
@@ -441,14 +436,12 @@ int readEncDelta(EncState& st, int pinCLK, int pinDT) {
   int clk = digitalRead(pinCLK);
   unsigned long now = millis();
 
-  // Solo flanco de bajada
   if (st.prevCLK == HIGH && clk == LOW) {
     if (now - st.lastEdgeMs >= ENC_DEBOUNCE_MS) {
       st.lastEdgeMs = now;
 
       int dir = (digitalRead(pinDT) != clk) ? +1 : -1;
 
-      // Histéresis direccional
       if (st.lastDir != 0 && dir != st.lastDir && (now - st.lastTickMs) < ENC_GUARD_MS) {
         // ignore
       } else {
@@ -464,10 +457,13 @@ int readEncDelta(EncState& st, int pinCLK, int pinDT) {
 
 bool readEncButton(EncState& st, int pinSW) {
   unsigned long now = millis();
-  if (digitalRead(pinSW) == LOW && (now - st.lastBtnMs) > BTN_DEBOUNCE_MS) {
-    st.lastBtnMs = now;
-    while (digitalRead(pinSW) == LOW) delay(5);
-    return true;
+  int state = digitalRead(pinSW);
+
+  if (state == LOW) {
+    if ((now - st.lastBtnMs) > BTN_DEBOUNCE_MS) {
+      st.lastBtnMs = now;
+      return true;
+    }
   }
   return false;
 }
@@ -477,11 +473,11 @@ bool readEncButton(EncState& st, int pinSW) {
 // ================================
 const char* stateName(SystemState s) {
   switch (s) {
-    case IDLE: return "IDLE";
-    case EDIT: return "EDIT";
+    case IDLE:     return "IDLE";
+    case EDIT:     return "EDIT";
     case PLAY_ALL: return "PLAY_ALL";
-    case PLAY_LINE: return "PLAY_LINE";
-    default: return "UNKNOWN";
+    case PLAY_LINE:return "PLAY_LINE";
+    default:       return "UNKNOWN";
   }
 }
 
@@ -494,7 +490,7 @@ void connectWiFi() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   while (WiFi.status() != WL_CONNECTED) {
-    delay(350);
+    vTaskDelay(pdMS_TO_TICKS(350));
     Serial.print(".");
   }
   Serial.print("\nWiFi OK. IP: ");
@@ -510,6 +506,73 @@ static inline int bpmFromMs(int ms) {
   return ibpm;
 }
 
+// ================================
+//         HELPERS DE AUDIO
+// ================================
+static inline float midiToHz(uint8_t midi) {
+  if (midi == 0) return 0.0f;
+  if (midi > 127) midi = 127;
+  return 440.0f * powf(2.0f, ((int)midi - 69) / 12.0f);
+}
+
+static inline void recalcSamplesPerStep() {
+  samplesPerStep = (int)roundf(I2S_SR * 60.0f / (BPM * 4.0f)); // 4 steps por beat
+}
+
+void triggerStep(int s) {
+  int dval = matrixVals[s][0] & 0x0F;
+  enum DrumType : uint8_t { DR_NONE=0, DR_HAT=1, DR_SNARE=2, DR_KICK=3 };
+  struct DrumPreset { DrumType type; uint8_t periodIdx; bool shortMode; };
+  static const DrumPreset DRUM_PRESET[16] = {
+    {DR_NONE,0,true},{DR_HAT,0,true},{DR_HAT,2,true},{DR_HAT,4,true},
+    {DR_SNARE,8,false},{DR_SNARE,10,false},{DR_SNARE,12,false},{DR_KICK,15,false},
+    {DR_KICK,14,false},{DR_KICK,13,false},{DR_HAT,1,true},{DR_SNARE,9,false},
+    {DR_HAT,3,true},{DR_SNARE,11,false},{DR_KICK,15,false},{DR_HAT,5,true},
+  };
+  const DrumPreset& P = DRUM_PRESET[dval];
+  if (P.type != DR_NONE) {
+    envNoise = 1.0f;
+    nNoise.setShort(P.shortMode);
+    nNoise.setNote(P.periodIdx);
+  }
+  sq1.setFreq(midiToHz((uint8_t)matrixVals[s][1]));
+  sq2.setFreq(midiToHz((uint8_t)matrixVals[s][2]));
+  tri.setFreq(midiToHz((uint8_t)matrixVals[s][3]));
+}
+
+static void i2sWriteStereoSamples(const int16_t* data, size_t frames) {
+  size_t wr = 0;
+  i2s_write(I2S_PORT, (const char*)data, frames * 2 * sizeof(int16_t), &wr, portMAX_DELAY);
+}
+
+static void i2sInit() {
+  i2s_config_t cfg = {
+    .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
+    .sample_rate = I2S_SR,
+    .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+    .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
+    .communication_format = I2S_COMM_FORMAT_I2S,
+    .intr_alloc_flags = 0,
+    .dma_buf_count = 12,
+    .dma_buf_len = 512,
+    .use_apll = true,
+    .tx_desc_auto_clear = true,
+    .fixed_mclk = 0
+  };
+  i2s_pin_config_t pins = {
+    .bck_io_num=PIN_BCLK,
+    .ws_io_num=PIN_LRCK,
+    .data_out_num=PIN_DOUT,
+    .data_in_num=I2S_PIN_NO_CHANGE
+  };
+  i2s_driver_install(I2S_PORT, &cfg, 0, NULL);
+  i2s_set_pin(I2S_PORT, &pins);
+  i2s_set_clk(I2S_PORT, I2S_SR, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_STEREO);
+}
+
+// ================================
+//      MQTT CALLBACK
+// ================================
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   String msg;
   msg.reserve(length+1);
@@ -525,7 +588,6 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     } else if (msg == "IDLE") {
       RUN_SEQUENCER = false;
       gState = IDLE;
-      // mute suave por las dudas
       sq1.setFreq(0); sq2.setFreq(0); tri.setFreq(0); envNoise = 0.0f;
       drawStatus();
       mqttPublishState();
@@ -543,7 +605,6 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     }
   }
   else if (strcmp(topic, TOPIC_TEMPO) == 0) {
-    // acepta BPM (20-300) o ms por step (ej. "120ms" o "120" fuera del rango BPM)
     String s = msg;
     s.trim();
     int val = 0;
@@ -558,7 +619,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       newBpm = bpmFromMs(val);
     } else {
       if (val >= BPM_MIN && val <= BPM_MAX) newBpm = val;
-      else if (val >= 40 && val <= 1000)   newBpm = bpmFromMs(val); // heurística
+      else if (val >= 40 && val <= 1000)   newBpm = bpmFromMs(val);
     }
     if (newBpm != BPM) {
       BPM = newBpm;
@@ -580,6 +641,32 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       }
     }
   }
+  else if (strcmp(topic, TOPIC_PLAY_ROW) == 0) {
+    // Payload = número de fila a reproducir (0..ROWS-1)
+    int r = msg.toInt();
+    if (r >= 0 && r < ROWS) {
+      selectedRow = r;
+
+      // Asegurar que la fila quede visible
+      if (selectedRow < scrollIndex) {
+        scrollIndex = selectedRow;
+      }
+      if (selectedRow >= scrollIndex + VISIBLE_ROWS) {
+        scrollIndex = selectedRow - (VISIBLE_ROWS - 1);
+      }
+
+      redrawVisibleWindow(false);
+
+      // Entrar en modo PLAY_LINE (one-shot) igual que con el botón
+      gState = PLAY_LINE;
+      triggerStep(selectedRow);
+      previewActive = true;
+      previewSamplesLeft = samplesPerStep;
+
+      drawStatus();
+      mqttPublishState();
+    }
+  }
 }
 
 void connectMQTT() {
@@ -592,12 +679,170 @@ void connectMQTT() {
       mqttClient.subscribe(TOPIC_STATE);
       mqttClient.subscribe(TOPIC_TEMPO);
       mqttClient.subscribe(TOPIC_EDIT);
+      mqttClient.subscribe(TOPIC_PLAY_ROW);   // nuevo topic
       mqttPublishState();
     } else {
       Serial.print("rc=");
       Serial.println(mqttClient.state());
-      delay(1500);
+      vTaskDelay(pdMS_TO_TICKS(1500));
     }
+  }
+}
+
+// ================================
+//      HANDLERS LÓGICOS
+// ================================
+void handleEnc2Delta(int d2) {
+  if (gState == EDIT || gState == PLAY_LINE) {
+    int prevCol = selectedCol;
+    selectedCol = constrain(selectedCol + d2, 0, COLS); // 0..COLS (BPM virtual)
+    if (selectedCol != prevCol) {
+      drawMatrixRow(selectedRow, false);
+      redrawVisibleWindow(false);
+      drawStatus();
+    }
+  }
+}
+
+void handleEnc2Button() {
+  if (gState == EDIT || gState == PLAY_LINE) {
+    if (gState == PLAY_LINE) {
+      previewActive = false;
+      previewSamplesLeft = 0;
+    }
+    gState = IDLE;
+    sq1.setFreq(0); sq2.setFreq(0); tri.setFreq(0); envNoise = 0.0f;
+    redrawVisibleWindow(false);
+    drawStatus();
+    mqttPublishState();
+  } else {
+    gState = EDIT;
+    if (selectedRow < scrollIndex) scrollIndex = selectedRow;
+    if (selectedRow >= scrollIndex + VISIBLE_ROWS)
+      scrollIndex = selectedRow - (VISIBLE_ROWS - 1);
+    redrawVisibleWindow(false);
+    drawStatus();
+    mqttPublishState();
+  }
+}
+
+void handleEnc1Delta(int d1) {
+  if (gState == IDLE || gState == PLAY_ALL) {
+    int prev = selectedRow;
+    selectedRow = constrain(selectedRow + d1, 0, ROWS - 1);
+    int oldScroll = scrollIndex;
+    if (selectedRow < scrollIndex) scrollIndex = selectedRow;
+    if (selectedRow >= scrollIndex + VISIBLE_ROWS)
+      scrollIndex = selectedRow - (VISIBLE_ROWS - 1);
+
+    if (scrollIndex != oldScroll) {
+      redrawVisibleWindow(gState == PLAY_ALL);
+    } else {
+      updateHighlight(prev, selectedRow, gState == PLAY_ALL);
+      drawScrollBar();
+    }
+    drawStatus();
+  } else if (gState == EDIT || gState == PLAY_LINE) {
+    if (selectedCol == COLS) {  // BPM
+      int prevBpm = BPM;
+      BPM = constrain(BPM + d1 * BPM_STEP, BPM_MIN, BPM_MAX);
+      if (BPM != prevBpm) {
+        recalcSamplesPerStep();
+        drawStatus();
+        drawBpmCursor(true);
+      }
+    } else {
+      int prevVal = matrixVals[selectedRow][selectedCol];
+      if (selectedCol == 0) {
+        matrixVals[selectedRow][0] = constrain(prevVal + d1, 0, 15);
+      } else {
+        matrixVals[selectedRow][selectedCol] =
+            constrain(prevVal + d1, 0, 127);
+      }
+      drawMatrixRow(selectedRow, false);
+      drawEditCursor(true);
+      drawStatus();
+    }
+  }
+}
+
+void handleEnc1Button() {
+  if (gState == IDLE) {
+    RUN_SEQUENCER = !RUN_SEQUENCER;
+    gState = RUN_SEQUENCER ? PLAY_ALL : IDLE;
+    drawStatus();
+    mqttPublishState();
+  } else if (gState == EDIT) {
+    previewActive = !previewActive;
+    if (previewActive) {
+      gState = PLAY_LINE;
+      triggerStep(selectedRow);
+      previewSamplesLeft = samplesPerStep;
+    } else {
+      gState = EDIT;
+      sq1.setFreq(0); sq2.setFreq(0); tri.setFreq(0); envNoise = 0.0f;
+      previewSamplesLeft = 0;
+    }
+    drawStatus();
+    mqttPublishState();
+  } else if (gState == PLAY_ALL) {
+    RUN_SEQUENCER = false;
+    gState = IDLE;
+    sq1.setFreq(0); sq2.setFreq(0); tri.setFreq(0); envNoise = 0.0f;
+    drawStatus();
+    mqttPublishState();
+  } else if (gState == PLAY_LINE) {
+    previewActive = false;
+    gState = EDIT;
+    sq1.setFreq(0); sq2.setFreq(0); tri.setFreq(0); envNoise = 0.0f;
+    previewSamplesLeft = 0;
+    drawStatus();
+    mqttPublishState();
+  }
+}
+
+// ================================
+//       TASK DE INPUT (EVENTOS)
+// ================================
+void vInputTask(void *pvParameters) {
+  for (;;) {
+    int d1 = readEncDelta(enc1, ENC1_CLK, ENC1_DT);
+    if (d1 != 0 && queueEvents) {
+      Event ev = (d1 > 0) ? EV_ENC1_CW : EV_ENC1_CCW;
+      xQueueSend(queueEvents, &ev, 0);
+    }
+
+    int d2 = readEncDelta(enc2, ENC2_CLK, ENC2_DT);
+    if (d2 != 0 && queueEvents) {
+      Event ev = (d2 > 0) ? EV_ENC2_CW : EV_ENC2_CCW;
+      xQueueSend(queueEvents, &ev, 0);
+    }
+
+    if (readEncButton(enc1, ENC1_SW) && queueEvents) {
+      Event ev = EV_ENC1_PRESS;
+      xQueueSend(queueEvents, &ev, 0);
+    }
+
+    if (readEncButton(enc2, ENC2_SW) && queueEvents) {
+      Event ev = EV_ENC2_PRESS;
+      xQueueSend(queueEvents, &ev, 0);
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(INPUT_TASK_PERIOD_MS));
+  }
+}
+
+// ================================
+//       NUEVA TASK: MQTT
+// ================================
+void vMqttTask(void *pvParameters) {
+  for (;;) {
+    if (!mqttClient.connected()) {
+      connectMQTT();
+    } else {
+      mqttClient.loop();
+    }
+    vTaskDelay(pdMS_TO_TICKS(MQTT_TASK_PERIOD_MS));
   }
 }
 
@@ -611,7 +856,6 @@ void setup() {
     for (int c = 0; c < COLS; ++c)
       matrixVals[r][c] = DEFAULT_PATTERN[r][c];
 
-  // Encoders
   pinMode(ENC1_CLK, INPUT_PULLUP);
   pinMode(ENC1_DT , INPUT_PULLUP);
   pinMode(ENC1_SW , INPUT_PULLUP);
@@ -623,171 +867,98 @@ void setup() {
   enc2.prevCLK = digitalRead(ENC2_CLK);
   enc1.lastEdgeMs = enc2.lastEdgeMs = millis();
 
-  // TFT
+  queueEvents = xQueueCreate(EVENT_QUEUE_LEN, sizeof(Event));
+  if (queueEvents != nullptr) {
+    xTaskCreatePinnedToCore(
+      vInputTask,
+      "InputTask",
+      INPUT_TASK_STACK,
+      nullptr,
+      INPUT_TASK_PRIO,
+      &hInputTask,
+      1
+    );
+  } else {
+    Serial.println("ERROR: no se pudo crear queueEvents");
+  }
+
   tft.init();
   tft.setRotation(1);
   drawHeader();
   redrawVisibleWindow(false);
   drawStatus();
 
-  // I2S + audio
   i2sInit();
   nNoise.setShort(true);
   nNoise.setNote(0);
 
-  // timing: 16th notes -> 4 steps por beat
   recalcSamplesPerStep();
   triggerStep(step);
 
-  // WiFi + MQTT
   connectWiFi();
   connectMQTT();
+
+  xTaskCreatePinnedToCore(
+    vMqttTask,
+    "MqttTask",
+    MQTT_TASK_STACK,
+    nullptr,
+    MQTT_TASK_PRIO,
+    &hMqttTask,
+    0
+  );
 }
 
 void loop() {
-  const size_t FRAMES = 512;
-  static int16_t buf[FRAMES * 2];
+  static int16_t buf[AUDIO_FRAMES * 2];
   static int stepCounter = 0;
 
-  // ================= ENCODER2 (EDIT NAV) =================
-  int d2 = readEncDelta(enc2, ENC2_CLK, ENC2_DT);
-  if (d2 != 0) {
-    if (gState == EDIT || gState == PLAY_LINE) {
-      // mover columna (incluye “BPM” como columna virtual = COLS)
-      int prevCol = selectedCol;
-      selectedCol = constrain(selectedCol + d2, 0, COLS); // rango 0..COLS
-      if (selectedCol != prevCol) {
-        drawMatrixRow(selectedRow, false);
-        redrawVisibleWindow(false);
-        drawStatus();
-      }
-    } else {
-      // en IDLE/PLAY_ALL ignoramos la rotación del encoder2
-    }
-  }
-  if (readEncButton(enc2, ENC2_SW)) {
-    // toggle EDIT
-    if (gState == EDIT || gState == PLAY_LINE) {
-      if (gState == PLAY_LINE) { previewActive = false; previewSamplesLeft = 0; }
-      gState = IDLE;
-      // mute
-      sq1.setFreq(0); sq2.setFreq(0); tri.setFreq(0); envNoise = 0.0f;
-      redrawVisibleWindow(false);
-      drawStatus();
-      mqttPublishState();
-    } else {
-      gState = EDIT;
-      // asegurar cursor visible
-      if (selectedRow < scrollIndex) scrollIndex = selectedRow;
-      if (selectedRow >= scrollIndex + VISIBLE_ROWS) scrollIndex = selectedRow - (VISIBLE_ROWS - 1);
-      redrawVisibleWindow(false);
-      drawStatus();
-      mqttPublishState();
-    }
-  }
-
-  // ================= ENCODER1 (PLAY / VALUE) =================
-  int d1 = readEncDelta(enc1, ENC1_CLK, ENC1_DT);
-  if (d1 != 0) {
-    if (gState == IDLE || gState == PLAY_ALL) {
-      // mover fila (scroll)
-      int prev = selectedRow;
-      selectedRow = constrain(selectedRow + d1, 0, ROWS - 1);
-      int oldScroll = scrollIndex;
-      if (selectedRow < scrollIndex) scrollIndex = selectedRow;
-      if (selectedRow >= scrollIndex + VISIBLE_ROWS) scrollIndex = selectedRow - (VISIBLE_ROWS - 1);
-      if (scrollIndex != oldScroll) redrawVisibleWindow(gState==PLAY_ALL);
-      else { updateHighlight(prev, selectedRow, gState==PLAY_ALL); drawScrollBar(); }
-      drawStatus();
-    } else if (gState == EDIT || gState == PLAY_LINE) {
-      // editar valor de celda o BPM
-      if (selectedCol == COLS) {  // estamos en “BPM”
-        int prevBpm = BPM;
-        BPM = constrain(BPM + d1 * BPM_STEP, BPM_MIN, BPM_MAX);
-        if (BPM != prevBpm) {
-          recalcSamplesPerStep();
-          drawStatus();
-          drawBpmCursor(true);
-          // (opcional) publicar tempo normalizado como BPM
-          // char b[8]; snprintf(b,sizeof(b),"%d",BPM); mqttClient.publish(TOPIC_TEMPO,b);
-        }
-      } else {
-        int prevVal = matrixVals[selectedRow][selectedCol];
-        if (selectedCol == 0) { // Drum preset 0..15
-          matrixVals[selectedRow][0] = constrain(prevVal + d1, 0, 15);
-        } else { // MIDI 0..127
-          matrixVals[selectedRow][selectedCol] = constrain(prevVal + d1, 0, 127);
-        }
-        drawMatrixRow(selectedRow, false);
-        drawEditCursor(true);
-        drawStatus();
+  if (queueEvents) {
+    Event ev;
+    while (xQueueReceive(queueEvents, &ev, 0) == pdTRUE) {
+      switch (ev) {
+        case EV_ENC1_CW:   handleEnc1Delta(+1); break;
+        case EV_ENC1_CCW:  handleEnc1Delta(-1); break;
+        case EV_ENC2_CW:   handleEnc2Delta(+1); break;
+        case EV_ENC2_CCW:  handleEnc2Delta(-1); break;
+        case EV_ENC1_PRESS:handleEnc1Button();  break;
+        case EV_ENC2_PRESS:handleEnc2Button();  break;
       }
     }
   }
 
-  if (readEncButton(enc1, ENC1_SW)) {
-    if (gState == IDLE) {
-      // toggle PLAY_ALL
-      RUN_SEQUENCER = !RUN_SEQUENCER;
-      gState = RUN_SEQUENCER ? PLAY_ALL : IDLE;
-      drawStatus();
-      mqttPublishState();
-    } else if (gState == EDIT) {
-      // toggle PLAY_LINE (one-shot)
-      previewActive = !previewActive;
-      if (previewActive) {
-        gState = PLAY_LINE;
-        triggerStep(selectedRow);            // disparo único
-        previewSamplesLeft = samplesPerStep; // dura 1 step
-      } else {
-        gState = EDIT;
-        // mutear
-        sq1.setFreq(0); sq2.setFreq(0); tri.setFreq(0); envNoise = 0.0f;
-        previewSamplesLeft = 0;
-      }
-      drawStatus();
-      mqttPublishState();
-    } else if (gState == PLAY_ALL) {
-      // parar
-      RUN_SEQUENCER = false;
-      gState = IDLE;
-      // mute
-      sq1.setFreq(0); sq2.setFreq(0); tri.setFreq(0); envNoise = 0.0f;
-      drawStatus();
-      mqttPublishState();
-    } else if (gState == PLAY_LINE) {
-      // parar line (manual)
-      previewActive = false;
-      gState = EDIT;
-      sq1.setFreq(0); sq2.setFreq(0); tri.setFreq(0); envNoise = 0.0f;
-      previewSamplesLeft = 0;
-      drawStatus();
-      mqttPublishState();
-    }
-  }
-
-  // ================= AUDIO =================
-  for (size_t i = 0; i < FRAMES; ++i) {
+  for (size_t i = 0; i < AUDIO_FRAMES; ++i) {
     float mix = 0.0f;
 
     if (gState == PLAY_ALL && RUN_SEQUENCER) {
-      float nN = nNoise.tick(); float mixDrums = nN * envNoise * GAIN_NOISE * MASTER_DRUMS; envNoise *= DECAY_NOISE;
-      float s1  = sq1.tick(); float s2  = sq2.tick(); float t   = tri.tick();
-      float mixSynth = (s1 + s2 + t) * MASTER_SYNTH; mix = mixDrums + mixSynth;
+      float nN = nNoise.tick();
+      float mixDrums = nN * envNoise * GAIN_NOISE * MASTER_DRUMS;
+      envNoise *= DECAY_NOISE;
+      float s1  = sq1.tick();
+      float s2  = sq2.tick();
+      float t   = tri.tick();
+      float mixSynth = (s1 + s2 + t) * MASTER_SYNTH;
+      mix = mixDrums + mixSynth;
 
       if (++stepCounter >= samplesPerStep) {
-        stepCounter = 0; int prevStep = step; step = (step + 1) % STEPS; triggerStep(step);
+        stepCounter = 0;
+        int prevStep = step;
+        step = (step + 1) % STEPS;
+        triggerStep(step);
         int oldScroll = scrollIndex;
         if (step < scrollIndex) scrollIndex = step;
         if (step >= scrollIndex + VISIBLE_ROWS) scrollIndex = step - (VISIBLE_ROWS - 1);
-        if (scrollIndex != oldScroll) redrawVisibleWindow(true);
-        else { updateHighlight(prevStep, step, true); drawScrollBar(); }
+        if (scrollIndex != oldScroll) {
+          redrawVisibleWindow(true);
+        } else {
+          updateHighlight(prevStep, step, true);
+          drawScrollBar();
+        }
         drawStatus();
       }
     } else if (gState == PLAY_LINE && previewActive) {
-      // ONE-SHOT: reproduce solo una vez, sin retrigger
       float nN = nNoise.tick();
-      float mixDrums = nN * envNoise * GAIN_NOISE * MASTER_DRUMS; 
+      float mixDrums = nN * envNoise * GAIN_NOISE * MASTER_DRUMS;
       envNoise *= DECAY_NOISE;
 
       float s1  = sq1.tick();
@@ -797,9 +968,7 @@ void loop() {
 
       mix = mixDrums + mixSynth;
 
-      // Countdown de samples del one-shot
       if (--previewSamplesLeft <= 0) {
-        // Termina la pre-escucha y volvemos a EDIT
         previewActive = false;
         gState = EDIT;
         sq1.setFreq(0); sq2.setFreq(0); tri.setFreq(0); envNoise = 0.0f;
@@ -810,20 +979,23 @@ void loop() {
       mix = 0.0f;
     }
 
-    if (mix > 1.0f) mix = 1.0f; if (mix < -1.0f) mix = -1.0f;
+    if (mix > 1.0f) mix = 1.0f;
+    if (mix < -1.0f) mix = -1.0f;
     int16_t y = (int16_t)(mix * 32767.0f);
-    buf[2*i+0] = y; buf[2*i+1] = y;
+    buf[2*i+0] = y;
+    buf[2*i+1] = y;
   }
-  i2sWriteStereoSamples(buf, FRAMES);
+  i2sWriteStereoSamples(buf, AUDIO_FRAMES);
 
-  // MQTT
-  if (!mqttClient.connected()) connectMQTT();
-  mqttClient.loop();
-
-  // Scroll por Serial
   while (Serial.available()) {
     char c = Serial.read();
-    if (c == 'w' && scrollIndex > 0) { scrollIndex--; redrawVisibleWindow(gState==PLAY_ALL); }
-    if (c == 's' && scrollIndex < ROWS - VISIBLE_ROWS) { scrollIndex++; redrawVisibleWindow(gState==PLAY_ALL); }
+    if (c == 'w' && scrollIndex > 0) {
+      scrollIndex--;
+      redrawVisibleWindow(gState==PLAY_ALL);
+    }
+    if (c == 's' && scrollIndex < ROWS - VISIBLE_ROWS) {
+      scrollIndex++;
+      redrawVisibleWindow(gState==PLAY_ALL);
+    }
   }
 }
