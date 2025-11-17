@@ -18,8 +18,6 @@ import androidx.appcompat.app.AppCompatActivity; // Es importante usar AppCompat
 import org.json.JSONException;
 import org.json.JSONObject;
 
-// 1. Usa AppCompatActivity para mejor compatibilidad
-// 2. Implementa la interfaz que creamos en el Adapter
 public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnCellEditListener {
 
     // --- Matriz y sus dimensiones ---
@@ -40,7 +38,7 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
     private Button cmdReproducir;
     private LinearLayout menuPrincipalLayout;
     // --- Botones Menú Edición ---
-    private Button cmdPlayCell;
+    private Button cmdPlayRow;
     private Button cmdSave;
     private Button cmdBackToMenu;
     private LinearLayout menuEdicionLayout;
@@ -79,7 +77,7 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
         menuPrincipalLayout = findViewById(R.id.menuPrincipalLayout); // Asume que tienes un LinearLayout con este ID
 
         // Vistas del menú de edición
-        cmdPlayCell = findViewById(R.id.cmdPlayCell); // Asume que tienes este botón en tu layout
+        cmdPlayRow = findViewById(R.id.cmdPlayRow); // Asume que tienes este botón en tu layout
         cmdSave = findViewById(R.id.cmdSave);         // Asume que tienes este botón en tu layout
         cmdBackToMenu = findViewById(R.id.cmdBackToMenu); // Asume que tienes este botón en tu layout
         menuEdicionLayout = findViewById(R.id.menuEdicionLayout); // Asume que tienes un LinearLayout con este ID
@@ -88,7 +86,7 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
         // --- Configuración de Listeners ---
         cmdEditar.setOnClickListener(botonesListeners);
         cmdReproducir.setOnClickListener(botonesListeners);
-        cmdPlayCell.setOnClickListener(botonesListeners);
+        cmdPlayRow.setOnClickListener(botonesListeners);
         cmdSave.setOnClickListener(botonesListeners);
         cmdBackToMenu.setOnClickListener(botonesListeners);
         // ----------------------------------
@@ -133,9 +131,6 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
      * Este método es llamado por el Adapter cada vez que una celda es presionada.
      * En modo IDLE, selecciona la celda.
      * En modo EDITING, permite cambiar su valor.
-     * @param row Fila de la celda modificada.
-     * @param col Columna de la celda modificada.
-     * @param value El nuevo valor numérico de la celda (si se cambió).
      */
     @Override
     public void onCellEdited(int row, int col, int value) {
@@ -143,13 +138,13 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
             // En modo IDLE, solo seleccionamos la celda
             selectedRow = row;
             selectedCol = col;
-            matrixAdapter.setSelection(row, col); // Resaltar visualmente la celda
+            matrixAdapter.setSelection(row, col); // Resaltar la celda
             txtJson.setText("Celda (" + row + ", " + col + ") seleccionada. Presiona EDITAR.");
         }
     }
 
     /**
-     * Rellena la matriz con valores iniciales (en este caso, 0).
+     * Rellena la matriz con valores iniciales
      */
     private void initializeMatrix() {
         for (int i = 0; i < ROWS; i++) {
@@ -163,7 +158,7 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
         ConfigMQTT.useServerUBIDOTS();
         mqttHandler.connect(ConfigMQTT.mqttServer, ConfigMQTT.CLIENT_ID, ConfigMQTT.userName, ConfigMQTT.userPass);
 
-        // Damos un tiempo prudencial para que se establezca la conexión antes de suscribir
+        // Tiempo de espera de conexion
         try {
             Thread.sleep(1000);
             subscribeToTopic(ConfigMQTT.topicStatus);
@@ -224,9 +219,9 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
             }
 
             // --- Lógica del Menú de Edición ---
-            else if (view.getId() == R.id.cmdPlayCell) {
+            else if (view.getId() == R.id.cmdPlayRow) {
                 if (selectedRow != -1) {
-                    publishMessage(ConfigMQTT.topicState, "PlayCell");
+                    publishMessage(ConfigMQTT.topicPlayRow, String.valueOf(selectedRow));
                 }
             } else if (view.getId() == R.id.cmdSave) {
                 if (selectedRow != -1 && selectedCol != -1) {
@@ -247,6 +242,7 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
                 currentState = AppState.IDLE;
                 matrixAdapter.setEditing(false); // Deshabilita la edición en el adapter
                 updateUIVisibility();
+                setPhoneState(AppState.IDLE);
                 publishMessage(ConfigMQTT.topicState, "Idle");
             }
         }

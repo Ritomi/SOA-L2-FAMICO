@@ -85,10 +85,10 @@
         android:visibility="gone">
 
         <Button
-            android:id="@+id/cmdPlayCell"
+            android:id="@+id/cmdPlayRow"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Play Cell" />
+            android:text="Play Row" />
 
         <Button
             android:id="@+id/cmdSave"

@@ -10,6 +10,7 @@ public class ConfigMQTT {
     public static final String TOPIC_STATE_EMQX = "/simulator/state";
     public static final String TOPIC_TEMPO_EMQX = "/simulator/tempo";
     public static final String TOPIC_EDIT_EMQX = "/simulator/edit";
+    public static final String TOPIC_PLAY_ROW_EMQX= "/simulator/playRow";
 
     // Servidor Ubidots
     public static final String MQTT_SERVER_UBIDOTS = "tcp://industrial.api.ubidots.com:1883";
@@ -19,6 +20,7 @@ public class ConfigMQTT {
     public static final String TOPIC_STATE_UBIDOTS = "/v1.6/devices/simulator/state";
     public static final String TOPIC_TEMPO_UBIDOTS = "/v1.6/devices/simulator/tempo";
     public static final String TOPIC_EDIT_UBIDOTS = "/v1.6/devices/simulator/edit";
+    public static final String TOPIC_PLAY_ROW_UBIDOTS= "/v1.6/devices/simulator/playRow";
 
     // Variables globales modificables
     public static String mqttServer;
@@ -28,6 +30,7 @@ public class ConfigMQTT {
     public static String topicState;
     public static String topicTempo;
     public static String topicEdit;
+    public static String topicPlayRow;
 
 
     // Métodos para seleccionar EMQX
@@ -39,6 +42,7 @@ public class ConfigMQTT {
         topicState = TOPIC_STATE_EMQX;
         topicTempo = TOPIC_TEMPO_EMQX;
         topicEdit = TOPIC_EDIT_EMQX;
+        topicPlayRow = TOPIC_PLAY_ROW_EMQX;
     }
 
     // Métodos para seleccionar Ubidots
@@ -50,5 +54,6 @@ public class ConfigMQTT {
         topicState = TOPIC_STATE_UBIDOTS;
         topicTempo = TOPIC_TEMPO_UBIDOTS;
         topicEdit = TOPIC_EDIT_UBIDOTS;
+        topicPlayRow = TOPIC_PLAY_ROW_UBIDOTS;
     }
 }
