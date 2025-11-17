@@ -1,46 +1,60 @@
 package com.ashencostha.mqtt;
 
 import android.content.Context;
-import android.text.Editable;import android.text.TextWatcher;
+import android.graphics.Color;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.BaseAdapter;
 import android.widget.EditText;
+import android.widget.Toast;
 
 public class MatrixAdapter extends BaseAdapter {
 
-    /**
-     * Interfaz de comunicación. Define un contrato que MainActivity debe cumplir.
-     * Permite que el Adapter notifique a la Activity sin conocerla directamente (buena práctica).
-     */
+    private final Context context;
+    private final int[][] matrix;
+    private final OnCellEditListener listener;
+
+    private int selectedRow = -1;
+    private int selectedCol = -1;
+    private boolean isEditing = false;
+
     public interface OnCellEditListener {
         void onCellEdited(int row, int col, int value);
     }
 
-    private final Context context;
-    private final int[][] matrix;
-    private final OnCellEditListener listener; // Referencia a la clase que implementa la interfaz (MainActivity)
-    private final int ROWS;
-    private final int COLS;
-
     public MatrixAdapter(Context context, int[][] matrix, OnCellEditListener listener) {
         this.context = context;
         this.matrix = matrix;
-        this.listener = listener; // Guardamos la referencia a MainActivity
-        this.ROWS = matrix.length;
-        this.COLS = matrix[0].length;
+        this.listener = listener;
+    }
+
+    public void setSelection(int row, int col) {
+        selectedRow = row;
+        selectedCol = col;
+        notifyDataSetChanged();
+    }
+
+    public void setEditing(boolean editing) {
+        isEditing = editing;
+        if (!editing) {
+            setSelection(-1, -1);
+        }
+        notifyDataSetChanged();
     }
 
     @Override
     public int getCount() {
-        return ROWS * COLS; // El número total de celdas
+        if (matrix == null || matrix.length == 0) return 0;
+        return matrix.length * matrix[0].length;
     }
 
     @Override
     public Object getItem(int position) {
-        int row = position / COLS;
-        int col = position % COLS;
+        int row = position / matrix[0].length;
+        int col = position % matrix[0].length;
         return matrix[row][col];
     }
 
@@ -51,75 +65,106 @@ public class MatrixAdapter extends BaseAdapter {
 
     @Override
     public View getView(int position, View convertView, ViewGroup parent) {
-        final EditText editText;
+        ViewHolder holder;
 
-        // Patrón ViewHolder para reutilizar vistas y mejorar el rendimiento
         if (convertView == null) {
-            // Si la vista no existe, la "inflamos" desde nuestro layout grid_item.xml
-            convertView = LayoutInflater.from(context).inflate(R.layout.grid_item, parent, false);
-            editText = convertView.findViewById(R.id.grid_item_value);
-            convertView.setTag(new ViewHolder(editText));
+            LayoutInflater inflater = (LayoutInflater) context.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
+            // We use the grid_item.xml layout here
+            convertView = inflater.inflate(R.layout.grid_item, parent, false);
+            holder = new ViewHolder((EditText) convertView);
+            convertView.setTag(holder);
         } else {
-            // Si la vista ya existe, la reutilizamos
-            ViewHolder holder = (ViewHolder) convertView.getTag();
-            editText = holder.editText;
+            holder = (ViewHolder) convertView.getTag();
         }
 
-        // Obtenemos el TextWatcher antiguo para removerlo y evitar llamadas múltiples
-        TextWatcher oldWatcher = (TextWatcher) editText.getTag(R.id.grid_item_value);
-        if (oldWatcher != null) {
-            editText.removeTextChangedListener(oldWatcher);
+        final int numCols = matrix[0].length;
+        final int row = position / numCols;
+        final int col = position % numCols;
+
+        // Temporarily remove the watcher to prevent loops while setting text
+        holder.editText.removeTextChangedListener(holder.textWatcher);
+        holder.editText.setText(String.valueOf(matrix[row][col]));
+        holder.textWatcher.updatePosition(row, col);
+        holder.editText.addTextChangedListener(holder.textWatcher);
+
+        boolean isTheSelectedCell = (row == selectedRow && col == selectedCol);
+
+        // --- CORRECTED LOGIC ---
+        if (isEditing && isTheSelectedCell) {
+            // EDIT MODE for THIS CELL
+            holder.editText.setFocusable(true);
+            holder.editText.setFocusableInTouchMode(true); // Allows touch to focus
+            holder.editText.setBackgroundColor(Color.YELLOW);
+            holder.editText.requestFocus(); // Pop up the keyboard
+        } else {
+            // IDLE MODE or NOT THE SELECTED CELL
+            holder.editText.setFocusable(false);
+            holder.editText.setFocusableInTouchMode(false); // Prevents touch from starting edit
+            holder.editText.setBackgroundColor(isTheSelectedCell ? Color.CYAN : Color.LTGRAY);
         }
 
-        // Calculamos la fila y columna a partir de la posición lineal
-        final int row = position / COLS;
-        final int col = position % COLS;
-
-        // Establecemos el valor actual de la celda en el EditText
-        editText.setText(String.valueOf(matrix[row][col]));
-
-        // Creamos un nuevo listener para detectar cambios en el texto
-        TextWatcher newWatcher = new TextWatcher() {
-            @Override
-            public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
-
-            @Override
-            public void onTextChanged(CharSequence s, int start, int before, int count) {}
-
-            @Override
-            public void afterTextChanged(Editable s) {
-                try {
-                    // Cuando el texto cambia, intentamos convertirlo a un número
-                    int newValue = Integer.parseInt(s.toString());
-
-                    // Comprobamos si el valor realmente cambió para evitar publicaciones innecesarias
-                    if (matrix[row][col] != newValue) {
-                        matrix[row][col] = newValue; // Actualizamos el valor en nuestro array de datos
-
-                        // Usamos la interfaz para notificar a MainActivity sobre el cambio
-                        if (listener != null) {
-                            listener.onCellEdited(row, col, newValue);
-                        }
-                    }
-                } catch (NumberFormatException e) {
-                    // Si el usuario borra el texto o introduce algo inválido, no hacemos nada o asignamos 0
-                }
+        // --- CLICK LISTENER to enable cell selection ---
+        holder.editText.setOnClickListener(v -> {
+            if (listener != null) {
+                // Always notify MainActivity when a cell is tapped
+                listener.onCellEdited(row, col, matrix[row][col]);
             }
-        };
-
-        editText.addTextChangedListener(newWatcher);
-        // Guardamos el nuevo watcher en un tag para poder quitarlo la próxima vez que se reutilice la vista
-        editText.setTag(R.id.grid_item_value, newWatcher);
+        });
 
         return convertView;
     }
 
-    // Clase ViewHolder para almacenar las vistas y mejorar el rendimiento de la GridView
-    private static class ViewHolder {
-        final EditText editText;
+    private class ViewHolder {
+        EditText editText;
+        CustomTextWatcher textWatcher;
 
         ViewHolder(EditText editText) {
             this.editText = editText;
+            this.textWatcher = new CustomTextWatcher();
+        }
+    }
+
+    private class CustomTextWatcher implements TextWatcher {
+        private int row;
+        private int col;
+
+        public void updatePosition(int row, int col) {
+            this.row = row;
+            this.col = col;
+        }
+
+        @Override
+        public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+
+        @Override
+        public void onTextChanged(CharSequence s, int start, int before, int count) {}
+
+        @Override
+        public void afterTextChanged(Editable s) {
+            // Only update if we are in edit mode for this specific cell
+            if (isEditing && row == selectedRow && col == selectedCol) {
+                try {
+                    int newValue = s.length() > 0 ? Integer.parseInt(s.toString()) : 0;
+                    if(selectedCol == 0 && (newValue < 0 || newValue > 15)){
+                        Toast.makeText(context, "El valor debe estar entre 0 y 15", Toast.LENGTH_SHORT).show();
+                        s.replace(0, s.length(), String.valueOf(matrix[row][col]));
+                        return;
+                    }else if(selectedCol > 0 && (newValue < 0 || newValue > 127)){
+                        Toast.makeText(context, "El valor debe estar entre 0 y 127", Toast.LENGTH_SHORT).show();
+                        s.replace(0, s.length(), String.valueOf(matrix[row][col]));
+                        return;
+                    }
+                    if (matrix[row][col] != newValue) {
+                        matrix[row][col] = newValue;
+                        if (listener != null) {
+                            // Inform MainActivity of the new value
+                            listener.onCellEdited(row, col, newValue);
+                        }
+                    }
+                } catch (NumberFormatException e) {
+                    Toast.makeText(context, "Por favor, ingrese solo números", Toast.LENGTH_SHORT).show();
+                }
+            }
         }
     }
 }

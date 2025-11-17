@@ -1,12 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Este layout define cómo se ve una sola celda de la matriz -->
 <EditText xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/grid_item_value"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:inputType="numberSigned"
-    android:textAlignment="center"
     android:textSize="14sp"
     android:padding="12dp"
+    android:gravity="center"
+    android:inputType="number"
     android:imeOptions="actionDone"
-    android:selectAllOnFocus="true" />
+    android:background="@android:color/transparent" />
