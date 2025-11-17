@@ -33,6 +33,8 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
     private MatrixAdapter matrixAdapter;
     private TextView txtJson;
     private TextView txtStatus;
+    private TextView txtEspStatus;
+    private TextView txtPhoneState;
     // --- Botones Menú Principal (Idle) ---
     private Button cmdEditar;
     private Button cmdReproducir;
@@ -64,9 +66,11 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
+
         // --- Vinculación de Vistas ---
         txtJson = findViewById(R.id.txtJson);
-        txtStatus = findViewById(R.id.txtStatus);
+        txtEspStatus = findViewById(R.id.txtEspStatus);
+        txtPhoneState = findViewById(R.id.txtPhoneState);
         matrixGridView = findViewById(R.id.matrixGridView);
 
         // Vistas del menú principal
@@ -98,6 +102,7 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
 
         // --- Estado Inicial de la UI ---
         updateUIVisibility();
+        setPhoneState(AppState.IDLE);
         // ---------------------------
 
         // --- Conexión MQTT y Configuración de Receivers ---
@@ -139,11 +144,7 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
             selectedRow = row;
             selectedCol = col;
             matrixAdapter.setSelection(row, col); // Resaltar visualmente la celda
-            Toast.makeText(this, "Celda (" + row + ", " + col + ") seleccionada. Presiona EDITAR.", Toast.LENGTH_SHORT).show();
-        } else { // EDITING
-            // En modo EDITING, el valor ya se actualizó en la matriz localmente por el Adapter
-            // No publicamos aquí, esperamos al botón "Guardar"
-            Toast.makeText(this, "Valor de la celda cambiado a: " + value, Toast.LENGTH_SHORT).show();
+            txtJson.setText("Celda (" + row + ", " + col + ") seleccionada. Presiona EDITAR.");
         }
     }
 
@@ -194,7 +195,7 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
     }
 
     private void publishMessage(String topic, String message) {
-        Toast.makeText(this, "Publicando: " + message, Toast.LENGTH_SHORT).show();
+        txtJson.setText("Publicando: " + message + " en " + topic);
         if (mqttHandler != null) {
             mqttHandler.publish(topic, message);
         }
@@ -210,17 +211,15 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
     private final View.OnClickListener botonesListeners = new View.OnClickListener() {
         @Override
         public void onClick(View view) {
-            // --- Lógica del Menú Principal ---
             if (view.getId() == R.id.cmdEditar) {
                 if (selectedRow != -1 && selectedCol != -1) {
-                    currentState = AppState.EDITING;
-                    matrixAdapter.setEditing(true); // Habilita la edición en el adapter
-                    updateUIVisibility();
+                    setPhoneState(AppState.EDITING); // <-- USE THE METHOD
+                    matrixAdapter.setEditing(true);
                     publishMessage(ConfigMQTT.topicState, "Edit");
                 } else {
                     Toast.makeText(MainActivity.this, "Por favor, seleccione una celda primero", Toast.LENGTH_SHORT).show();
                 }
-            } else if (view.getId() == R.id.cmdReproducir) {
+        } else if (view.getId() == R.id.cmdReproducir) {
                 publishMessage(ConfigMQTT.topicState, "PlayAll");
             }
 
@@ -277,12 +276,26 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
                     if (topic != null && topic.equals(ConfigMQTT.topicStatus)) {
                         JSONObject jsonObject = new JSONObject(msgJson);
                         String value = jsonObject.getString("value");
-                        txtStatus.setText(String.format("%s°", value));
+                        txtEspStatus.setText(String.format("Estado ESP: %s", value));
                     }
                 } catch (JSONException e) {
                     e.printStackTrace();
                 }
             }
         }
+    }
+
+    /**
+     * Changes the application's internal state and updates the UI.
+     * @param newState The new state to transition to (IDLE or EDITING).
+     */
+    private void setPhoneState(AppState newState) {
+        currentState = newState;
+        if (newState == AppState.IDLE) {
+            txtPhoneState.setText("Estado App: Idle");
+        } else {
+            txtPhoneState.setText("Estado App: Editando");
+        }
+        updateUIVisibility(); // This will handle showing/hiding menus
     }
 }

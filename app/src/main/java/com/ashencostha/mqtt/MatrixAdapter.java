@@ -1,15 +1,18 @@
 package com.ashencostha.mqtt;
 
 import android.content.Context;
-import android.graphics.Color; // <-- Correct Color class
-import android.view.LayoutInflater;import android.view.View;
+import android.graphics.Color;
+import android.text.Editable;
+import android.text.TextWatcher;
+import android.view.LayoutInflater;
+import android.view.View;
 import android.view.ViewGroup;
 import android.widget.BaseAdapter;
-import android.widget.Button;
+import android.widget.EditText;
+import android.widget.Toast;
 
 public class MatrixAdapter extends BaseAdapter {
 
-    // --- Member Variables ---
     private final Context context;
     private final int[][] matrix;
     private final OnCellEditListener listener;
@@ -17,57 +20,33 @@ public class MatrixAdapter extends BaseAdapter {
     private int selectedRow = -1;
     private int selectedCol = -1;
     private boolean isEditing = false;
-    // ------------------------
 
-    /**
-     * Listener interface to communicate events back to the Activity.
-     */
     public interface OnCellEditListener {
         void onCellEdited(int row, int col, int value);
     }
 
-    /**
-     * Constructor for the adapter.
-     * @param context The application context.
-     * @param matrix The 2D array holding the matrix data.
-     * @param listener The listener to be notified of cell events.
-     */
     public MatrixAdapter(Context context, int[][] matrix, OnCellEditListener listener) {
         this.context = context;
         this.matrix = matrix;
         this.listener = listener;
     }
 
-    // --- New methods for state management ---
-
-    /**
-     * Sets the currently selected cell to be highlighted.
-     * @param row The selected row.
-     * @param col The selected column.
-     */
     public void setSelection(int row, int col) {
         selectedRow = row;
         selectedCol = col;
-        notifyDataSetChanged(); // Redraws the grid to apply the highlight.
+        notifyDataSetChanged();
     }
 
-    /**
-     * Enables or disables the editing mode.
-     * @param editing True to enable editing, false to disable.
-     */
     public void setEditing(boolean editing) {
         isEditing = editing;
-        // When we exit edit mode, clear the visual selection.
         if (!editing) {
             setSelection(-1, -1);
         }
+        notifyDataSetChanged();
     }
-    // ----------------------------------------
-
 
     @Override
     public int getCount() {
-        // The total number of cells is ROWS * COLS
         if (matrix == null || matrix.length == 0) return 0;
         return matrix.length * matrix[0].length;
     }
@@ -86,47 +65,97 @@ public class MatrixAdapter extends BaseAdapter {
 
     @Override
     public View getView(int position, View convertView, ViewGroup parent) {
-        Button button;
+        ViewHolder holder;
 
         if (convertView == null) {
-            // If it's not recycled, inflate a new view.
-            // We assume you have a layout file `grid_item.xml` with just a Button.
             LayoutInflater inflater = (LayoutInflater) context.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
+            // We use the grid_item.xml layout here
             convertView = inflater.inflate(R.layout.grid_item, parent, false);
+            holder = new ViewHolder((EditText) convertView);
+            convertView.setTag(holder);
+        } else {
+            holder = (ViewHolder) convertView.getTag();
         }
 
-        button = (Button) convertView;
-
-        // Get row and column from the 1D position
         final int numCols = matrix[0].length;
         final int row = position / numCols;
         final int col = position % numCols;
 
-        // Set the button's text to the value from the matrix
-        button.setText(String.valueOf(matrix[row][col]));
+        // Temporarily remove the watcher to prevent loops while setting text
+        holder.editText.removeTextChangedListener(holder.textWatcher);
+        holder.editText.setText(String.valueOf(matrix[row][col]));
+        holder.textWatcher.updatePosition(row, col);
+        holder.editText.addTextChangedListener(holder.textWatcher);
 
-        // --- Block for Highlighting ---
-        if (row == selectedRow && col == selectedCol) {
-            button.setBackgroundColor(Color.CYAN); // Highlight color for the selected cell
+        boolean isTheSelectedCell = (row == selectedRow && col == selectedCol);
+
+        // --- CORRECTED LOGIC ---
+        if (isEditing && isTheSelectedCell) {
+            // EDIT MODE for THIS CELL
+            holder.editText.setFocusable(true);
+            holder.editText.setFocusableInTouchMode(true); // Allows touch to focus
+            holder.editText.setBackgroundColor(Color.YELLOW);
+            holder.editText.requestFocus(); // Pop up the keyboard
         } else {
-            button.setBackgroundColor(Color.LTGRAY); // Default cell color
+            // IDLE MODE or NOT THE SELECTED CELL
+            holder.editText.setFocusable(false);
+            holder.editText.setFocusableInTouchMode(false); // Prevents touch from starting edit
+            holder.editText.setBackgroundColor(isTheSelectedCell ? Color.CYAN : Color.LTGRAY);
         }
-        // ------------------------------
 
-        // --- OnClickListener for the cell ---
-        button.setOnClickListener(v -> {
-            // If in editing mode, increment the cell's value
-            if (isEditing) {
-                // Increment value logic (e.g., cycles from 0 to 127)
-                matrix[row][col] = (matrix[row][col] + 1) % 128;
-                button.setText(String.valueOf(matrix[row][col]));
-            }
-            // Always notify the listener, whether for selection (in IDLE mode) or for editing.
+        // --- CLICK LISTENER to enable cell selection ---
+        holder.editText.setOnClickListener(v -> {
             if (listener != null) {
+                // Always notify MainActivity when a cell is tapped
                 listener.onCellEdited(row, col, matrix[row][col]);
             }
         });
 
         return convertView;
+    }
+
+    private class ViewHolder {
+        EditText editText;
+        CustomTextWatcher textWatcher;
+
+        ViewHolder(EditText editText) {
+            this.editText = editText;
+            this.textWatcher = new CustomTextWatcher();
+        }
+    }
+
+    private class CustomTextWatcher implements TextWatcher {
+        private int row;
+        private int col;
+
+        public void updatePosition(int row, int col) {
+            this.row = row;
+            this.col = col;
+        }
+
+        @Override
+        public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+
+        @Override
+        public void onTextChanged(CharSequence s, int start, int before, int count) {}
+
+        @Override
+        public void afterTextChanged(Editable s) {
+            // Only update if we are in edit mode for this specific cell
+            if (isEditing && row == selectedRow && col == selectedCol) {
+                try {
+                    int newValue = s.length() > 0 ? Integer.parseInt(s.toString()) : 0;
+                    if (matrix[row][col] != newValue) {
+                        matrix[row][col] = newValue;
+                        if (listener != null) {
+                            // Inform MainActivity of the new value
+                            listener.onCellEdited(row, col, newValue);
+                        }
+                    }
+                } catch (NumberFormatException e) {
+                    Toast.makeText(context, "Por favor, ingrese solo números", Toast.LENGTH_SHORT).show();
+                }
+            }
+        }
     }
 }
