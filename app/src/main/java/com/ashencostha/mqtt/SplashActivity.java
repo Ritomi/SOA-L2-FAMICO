@@ -35,7 +35,6 @@ public class SplashActivity extends AppCompatActivity {
 
         // Listener botón comenzar (con toast de debug)
         btnComenzar.setOnClickListener(v -> {
-            Toast.makeText(SplashActivity.this, "Comenzar pulsado", Toast.LENGTH_SHORT).show();
             startActivity(new Intent(SplashActivity.this, MainActivity.class));
             finish();
         });
