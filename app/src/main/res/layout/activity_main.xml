@@ -53,33 +53,64 @@
         android:horizontalSpacing="4dp"
         android:layout_marginTop="8dp" />
 
-    <!-- Menú Principal -->
+    <!-- Menú Principal (con botones en 2 filas) -->
     <LinearLayout
         android:id="@+id/menuPrincipalLayout"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center"
+        android:orientation="vertical"
+        android:gravity="center_horizontal"
         android:visibility="visible">
 
-        <Button
-            android:id="@+id/cmdEditar"
+    <!-- Fila Superior de Botones -->
+        <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Editar" />
+            android:orientation="horizontal"
+            android:gravity="center">
 
-        <Button
-            android:id="@+id/cmdStop"
-            android:layout_width="65dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Stop" />
+            <Button
+                android:id="@+id/cmdEditar"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Edit" />
 
-        <Button
-            android:id="@+id/cmdReproducir"
+            <Button
+                android:id="@+id/cmdReproducir"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="PlayAll" />
+
+            <Button
+                android:id="@+id/cmdStop"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="Stop" />
+        </LinearLayout>
+
+        <!-- Fila Inferior de Botones -->
+        <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Reproducir Todo" />
+            android:orientation="horizontal"
+            android:gravity="center"
+            android:layout_marginTop="8dp">
+
+            <Button
+                android:id="@+id/cmdSaveSong"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Save" />
+
+            <Button
+                android:id="@+id/cmdOpenLibrary"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="Library" />
+        </LinearLayout>
     </LinearLayout>
 
     <!-- Menú de Edición -->
@@ -92,22 +123,26 @@
         android:visibility="gone">
 
         <Button
-            android:id="@+id/cmdPlayRow"
+            android:id="@+id/cmdBackToMenu"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Play Row" />
+            android:text="Back" />
 
         <Button
             android:id="@+id/cmdSave"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Guardar" />
+            android:layout_marginStart="8dp"
+            android:text="Save" />
 
         <Button
-            android:id="@+id/cmdBackToMenu"
+            android:id="@+id/cmdPlayRow"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Volver" />
+            android:layout_marginStart="8dp"
+            android:text="Play Row" />
+
+
     </LinearLayout>
 
 </LinearLayout>

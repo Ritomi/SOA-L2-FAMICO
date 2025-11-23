@@ -19,7 +19,9 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Mqtt"
         tools:targetApi="31">
-
+        <activity
+            android:name=".SavedSongsActivity"
+            android:exported="false" />
         <!-- SplashActivity será la que arranque la app -->
         <activity
             android:name=".SplashActivity"
@@ -27,21 +29,16 @@
             android:theme="@style/Theme.Mqtt.Splash">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
+
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-
-        </activity>
-
-        <!-- Pantalla de ayuda -->
+        </activity> <!-- Pantalla de ayuda -->
         <activity
             android:name=".HelpActivity"
-            android:exported="false" />
-
-        <!-- MainActivity (ahora ya no es LAUNCHER) -->
+            android:exported="false" /> <!-- MainActivity (ahora ya no es LAUNCHER) -->
         <activity
             android:name=".MainActivity"
             android:exported="false" />
-
     </application>
 
 </manifest>

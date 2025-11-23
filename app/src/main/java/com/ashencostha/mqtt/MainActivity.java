@@ -5,6 +5,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -12,15 +13,33 @@ import android.hardware.SensorManager;
 import android.os.Bundle;
 import android.view.View;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.GridView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+// New Songs Library Imports
+import android.content.DialogInterface;
+import android.text.InputType;
+import android.widget.EditText;
+import androidx.annotation.Nullable;
+import androidx.appcompat.app.AlertDialog;
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
+import java.lang.reflect.Type;
+import java.util.ArrayList;
+
+
+import androidx.annotation.Nullable;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 
 import org.json.JSONException;
 import org.json.JSONObject;
+
+import java.lang.reflect.Type;
+import java.util.ArrayList;
 
 public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnCellEditListener, SensorEventListener {
 
@@ -41,6 +60,9 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
     private Button cmdEditar;
     private Button cmdStop;
     private Button cmdReproducir;
+    private Button cmdSaveSong;
+    private Button cmdOpenLibrary;
+
     private LinearLayout menuPrincipalLayout;
     // --- Botones Menú Edición ---
     private Button cmdPlayRow;
@@ -75,6 +97,9 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
     private float lastX, lastY, lastZ;
     private static final int SHAKE_THRESHOLD = 800; // Adjust this for sensitivity
     private boolean firstShakeSample = true;
+    // ----------------------------
+
+    private static final int LOAD_SONG_REQUEST_CODE = 1;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -89,6 +114,8 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
         matrixGridView = findViewById(R.id.matrixGridView);
 
         // Vistas del menú principal
+        cmdSaveSong = findViewById(R.id.cmdSaveSong);
+        cmdOpenLibrary = findViewById(R.id.cmdOpenLibrary);
         cmdEditar = findViewById(R.id.cmdEditar);
         cmdStop = findViewById(R.id.cmdStop);
         cmdReproducir = findViewById(R.id.cmdReproducir);
@@ -102,6 +129,8 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
         // ------------------------------
 
         // --- Configuración de Listeners ---
+        cmdSaveSong.setOnClickListener(botonesListeners);
+        cmdOpenLibrary.setOnClickListener(botonesListeners);
         cmdEditar.setOnClickListener(botonesListeners);
         cmdStop.setOnClickListener(botonesListeners);
         cmdReproducir.setOnClickListener(botonesListeners);
@@ -246,6 +275,11 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
                 publishMessage(ConfigMQTT.topicState, "PlayAll");
             } else if (view.getId() == R.id.cmdStop) {
                 publishMessage(ConfigMQTT.topicState, "Idle");
+            } else if (view.getId() == R.id.cmdSaveSong) {
+                showSaveSongDialog();
+            } else if (view.getId() == R.id.cmdOpenLibrary) {
+                Intent intent = new Intent(MainActivity.this, SavedSongsActivity.class);
+                startActivityForResult(intent, LOAD_SONG_REQUEST_CODE);
             }
 
             // --- Lógica del Menú de Edición ---
@@ -460,5 +494,87 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
         matrixAdapter.notifyDataSetChanged();
         // Opcional: Mostrar el nuevo valor en el txtJson
         txtJson.setText("Valor cambiado por giroscopio: " + newValue);
+    }
+
+    private void showSaveSongDialog() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Guardar Canción");
+
+        // Set up the input
+        final EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_TEXT);
+        input.setHint("Nombre de la canción");
+        builder.setView(input);
+
+        // Set up the buttons
+        builder.setPositiveButton("Guardar", new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int which) {
+                String songName = input.getText().toString();
+                if (!songName.isEmpty()) {
+                    saveSong(songName);
+                } else {
+                    Toast.makeText(MainActivity.this, "El nombre no puede estar vacío", Toast.LENGTH_SHORT).show();
+                }
+            }
+        });
+        builder.setNegativeButton("Cancelar", new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int which) {
+                dialog.cancel();
+            }
+        });
+
+        builder.show();
+    }
+
+    private void saveSong(String name) {
+        SharedPreferences prefs = getSharedPreferences(SavedSongsActivity.SONGS_PREFS_KEY, MODE_PRIVATE);
+        String json = prefs.getString(SavedSongsActivity.SONGS_LIST_KEY, null);
+        Gson gson = new Gson();
+        Type type = new com.google.gson.reflect.TypeToken<ArrayList<Song>>() {}.getType();
+        ArrayList<Song> songList = gson.fromJson(json, type);
+        if (songList == null) {
+            songList = new ArrayList<>();
+        }
+
+        // Create a deep copy of the matrix to save
+        int[][] matrixToSave = new int[ROWS][COLS];
+        for(int i=0; i<ROWS; i++) {
+            for(int j=0; j<COLS; j++) {
+                matrixToSave[i][j] = matrixVals[i][j];
+            }
+        }
+
+        songList.add(new Song(name, matrixToSave));
+
+        // Save the updated list back to SharedPreferences
+        SharedPreferences.Editor editor = prefs.edit();
+        String updatedJson = gson.toJson(songList);
+        editor.putString(SavedSongsActivity.SONGS_LIST_KEY, updatedJson);
+        editor.apply();
+
+        Toast.makeText(this, "Canción '" + name + "' guardada.", Toast.LENGTH_SHORT).show();
+    }
+
+    // This method gets the result from SavedSongsActivity
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+
+        if (requestCode == LOAD_SONG_REQUEST_CODE && resultCode == RESULT_OK) {
+            if (data != null && data.hasExtra("loadedSong")) {
+                Song loadedSong = (Song) data.getSerializableExtra("loadedSong");
+                if (loadedSong != null) {
+                    // Load the song's matrix into our current matrix
+                    this.matrixVals = loadedSong.getMatrix();
+                    // IMPORTANT: Tell the adapter that the underlying data has completely changed
+                    matrixAdapter = new MatrixAdapter(this, matrixVals, this);
+                    matrixGridView.setAdapter(matrixAdapter);
+
+                    Toast.makeText(this, "Canción '" + loadedSong.getName() + "' cargada.", Toast.LENGTH_SHORT).show();
+                }
+            }
+        }
     }
 }
