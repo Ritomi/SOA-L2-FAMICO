@@ -1037,7 +1037,6 @@ void loop() {
     }
   };
 
-  // 🔻 ÚNICO switch(state) del loop: maneja eventos + audio
   switch (state) {
     case IDLE: {
       // --- Eventos ---
