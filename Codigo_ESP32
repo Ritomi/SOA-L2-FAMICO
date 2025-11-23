@@ -4,6 +4,11 @@
 #include <math.h>
 #include "driver/i2s.h"
 
+// FreeRTOS (para cola y tasks)
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
+
 // ================================
 //           WIFI + MQTT
 // ================================
@@ -12,8 +17,8 @@
 
 const char* WIFI_SSID = "SO Avanzados";
 const char* WIFI_PASS = "SOA.2019";
-const char* MQTT_BROKER = "broker.emqx.io";
-const int   MQTT_PORT   = 1883;
+const char* MQTT_BROKER    = "broker.emqx.io";
+const int   MQTT_PORT      = 1883;
 const char* MQTT_CLIENT_ID = "esp32_famico_sequencer";
 
 WiFiClient wifiClient;
@@ -25,6 +30,8 @@ const char* TOPIC_STATE     = "simulator/state";    // subscribe
 const char* TOPIC_TEMPO     = "simulator/tempo";    // subscribe (bpm o ms/step)
 const char* TOPIC_EDIT      = "simulator/edit";     // subscribe "r c v"
 const char* TOPIC_PLAY_ROW  = "simulator/playrow";  // subscribe "r" -> reproducir fila r
+const char* TOPIC_GET_CELL  = "simulator/getcell";  // subscribe "r c" -> pedir valor
+const char* TOPIC_CELL_VAL  = "simulator/cellval";  // publish  "v" (solo valor)
 
 // ================================
 //           TFT (ILI9341)
@@ -58,11 +65,10 @@ constexpr int HEADER_ICON_R = 9;
 // ================================
 //           ENCODERS
 // ================================
-// Encoder1 (PLAY / mover valores)
 #define ENC1_CLK 21
 #define ENC1_DT  22
 #define ENC1_SW  27
-// Encoder2 (EDIT / mover columna + entrar/salir EDIT)
+
 #define ENC2_CLK 32
 #define ENC2_DT  35
 #define ENC2_SW   5
@@ -88,13 +94,21 @@ EncState enc1, enc2;
 // ================================
 //           EVENTOS
 // ================================
-enum Event {
-  EV_ENC1_CW = 1,
-  EV_ENC1_CCW = 2,
-  EV_ENC1_PRESS = 3,
-  EV_ENC2_CW = 4,
-  EV_ENC2_CCW = 5,
-  EV_ENC2_PRESS = 6,
+enum Event : uint8_t {
+  EV_NONE = 0,
+  EV_ENC1_CW,
+  EV_ENC1_CCW,
+  EV_ENC1_PRESS,
+  EV_ENC2_CW,
+  EV_ENC2_CCW,
+  EV_ENC2_PRESS,
+  EV_MQTT_TO_IDLE,
+  EV_MQTT_TO_EDIT,
+  EV_MQTT_TO_PLAY_ALL,
+  EV_MQTT_TO_PLAY_LINE,
+  EV_MQTT_PLAY_ROW,
+  EV_MQTT_TEMPO_SET,
+  EV_MQTT_QUERY_CELL
 };
 
 QueueHandle_t queueEvents = nullptr;
@@ -111,12 +125,6 @@ constexpr TickType_t INPUT_TASK_PERIOD_MS = 2;
 constexpr TickType_t MQTT_TASK_PERIOD_MS  = 10;
 
 // ================================
-//           ESTADOS
-// ================================
-enum SystemState : uint8_t { IDLE=0, EDIT=1, PLAY_ALL=2, PLAY_LINE=3 };
-SystemState gState = IDLE;
-
-// ================================
 //            AUDIO (I2S)
 // ================================
 static const int I2S_SR   = 44100;
@@ -125,11 +133,10 @@ static const int PIN_BCLK = 33; // BCLK
 static const int PIN_LRCK = 25; // LRCLK / WS
 static const int PIN_DOUT = 26; // DIN -> MAX98357A
 
-bool RUN_SEQUENCER = false;      // usado en PLAY_ALL
-bool previewActive = false;      // usado en PLAY_LINE
-int  previewSamplesLeft = 0;     // contador para one-shot de PLAY_LINE
+// preview de línea (duración)
+int previewSamplesLeft = 0;
 
-static const int STEPS = 16;
+static const int STEPS = ROWS;   // ahora recorre las 192 filas
 static int step = 0;
 static int samplesPerStep = 0;
 
@@ -200,7 +207,7 @@ struct SqOsc {
 
 struct TriOsc{
   double phase=0, inc=0;
-  float amp=0.12f;
+  float amp=0.5f;
   void setFreq(float f){ inc = (f<=0)?0.0:(double)f/I2S_SR; }
   float tick(){
     if(inc==0) return 0;
@@ -216,6 +223,18 @@ static SqOsc  sq1, sq2;
 static TriOsc tri;
 
 // ================================
+//           UI FLAGS
+// ================================
+bool gUiEditMode    = false;  // true cuando estamos editando (EDIT o PLAY_LINE)
+bool gHighlightStep = false;  // true en modo play completo (resalta step)
+
+// Aux para eventos MQTT
+volatile int  gMqttPlayRow   = 0;
+volatile int  gMqttTempoBpm  = 120;
+volatile int  gMqttQueryRow  = 0;
+volatile int  gMqttQueryCol  = 0;
+
+// ================================
 //           DIBUJO TFT
 // ================================
 constexpr int STATUS_W = 92;
@@ -225,6 +244,8 @@ inline int statusBoxX() { return tft.width() - STATUS_W - STATUS_X_PAD; }
 inline int statusBoxY() { return 10; }
 
 void drawColumnHeaders(); // forward
+void drawStatus(const char* modeTxt); // forward
+void redrawVisibleWindow();           // forward
 
 void drawHeader() {
   tft.fillScreen(TFT_BLACK);
@@ -323,17 +344,6 @@ void drawMatrixRow(int rowIndex, bool rowHighlighted) {
   tft.drawCentreString(String(rowIndex), xStep + (STEP_COL_W/2) - 1, y + STEP_COL_PADY, 2);
 }
 
-void drawEditCursor(bool on) {
-  if (selectedCol == COLS) return;
-  if (gState != EDIT && gState != PLAY_LINE) return;
-  if (selectedRow < scrollIndex || selectedRow >= scrollIndex + VISIBLE_ROWS) return;
-
-  int x, y; cellXY(selectedRow, selectedCol, x, y);
-  uint16_t col = on ? TFT_ORANGE : TFT_BLACK;
-  tft.drawRect(x+1, y+1, CELL_W-4, CELL_H-4, col);
-  tft.drawRect(x+2, y+2, CELL_W-6, CELL_H-6, col);
-}
-
 void drawBpmCursor(bool on) {
   uint16_t col = on ? TFT_ORANGE : TFT_BLACK;
   int x = statusBoxX(), y = statusBoxY();
@@ -341,44 +351,46 @@ void drawBpmCursor(bool on) {
   tft.drawRect(x-2, y-2, STATUS_W+4, STATUS_H+4, col);
 }
 
-void redrawVisibleWindow(bool sequencerHighlight) {
+void drawEditCursor(bool on) {
+  if (!gUiEditMode) return;
+  if (selectedCol >= COLS) return;
+  if (selectedRow < scrollIndex || selectedRow >= scrollIndex + VISIBLE_ROWS) return;
+
+  int x, y;
+  cellXY(selectedRow, selectedCol, x, y);
+  uint16_t col = on ? TFT_ORANGE : TFT_BLACK;
+  tft.drawRect(x+1, y+1, CELL_W-4, CELL_H-4, col);
+  tft.drawRect(x+2, y+2, CELL_W-6, CELL_H-6, col);
+}
+
+void redrawVisibleWindow() {
   for (int r = 0; r < VISIBLE_ROWS; r++) {
     int rowIndex = scrollIndex + r;
     if (rowIndex >= ROWS) break;
 
-    bool hl = false;
-    if (sequencerHighlight) {
-      hl = (rowIndex == step);
-    } else {
-      if (gState == IDLE || gState == PLAY_ALL) {
-        hl = (rowIndex == selectedRow);
-      }
-    }
+    bool hl = gHighlightStep ? (rowIndex == step) : (rowIndex == selectedRow);
     drawMatrixRow(rowIndex, hl);
   }
   drawScrollBar();
   drawEditCursor(true);
-
-  if ((gState == EDIT || gState == PLAY_LINE) && selectedCol == COLS) {
+  if (gUiEditMode && selectedCol == COLS) {
     drawBpmCursor(true);
   } else {
     drawBpmCursor(false);
   }
 }
 
-void updateHighlight(int prev, int cur, bool sequencerHighlight) {
-  if (gState == EDIT || gState == PLAY_LINE) {
-    if (prev != -1) drawMatrixRow(prev, false);
-    drawMatrixRow(cur, false);
-    drawEditCursor(true);
-    return;
+void updateHighlight(int prev, int cur) {
+  if (prev != -1) {
+    bool hlPrev = gHighlightStep ? (prev == step) : (prev == selectedRow);
+    drawMatrixRow(prev, hlPrev);
   }
-  if (prev != -1) drawMatrixRow(prev, false);
-  drawMatrixRow(cur, true);
+  bool hlCur = gHighlightStep ? (cur == step) : (cur == selectedRow);
+  drawMatrixRow(cur, hlCur);
   drawEditCursor(true);
 }
 
-void drawStatus() {
+void drawStatus(const char* modeTxt) {
   const int boxX = statusBoxX();
   const int boxY = statusBoxY();
   const int boxW = STATUS_W;
@@ -393,22 +405,17 @@ void drawStatus() {
   uint8_t oldDatum = tft.getTextDatum();
   tft.setTextDatum(TR_DATUM);
 
-  const char* modeTxt =
-    (gState==IDLE)     ? "IDLE" :
-    (gState==EDIT)     ? "EDIT" :
-    (gState==PLAY_ALL) ? "PLAY_ALL" :
-                         "PLAY_LINE";
   tft.drawString(modeTxt, boxX + boxW - 1, boxY + 0, 1);
-  tft.drawString(String("BPM ")+String(BPM), boxX + boxW - 1, boxY + 9, 1);
+  tft.drawString(String("BPM ") + String(BPM), boxX + boxW - 1, boxY + 9, 1);
 
-  if (gState==EDIT || gState==PLAY_LINE) {
+  if (gUiEditMode) {
     if (selectedCol == COLS) {
       tft.setTextColor(TFT_ORANGE, TFT_BLACK);
       tft.drawString("C BPM", boxX + boxW - 1, boxY + 18, 1);
       drawBpmCursor(true);
     } else {
       tft.setTextColor(TFT_CYAN, TFT_BLACK);
-      tft.drawString(String("C ")+String(selectedCol), boxX + boxW - 1, boxY + 18, 1);
+      tft.drawString(String("C ") + String(selectedCol), boxX + boxW - 1, boxY + 18, 1);
       drawBpmCursor(false);
     }
   } else {
@@ -421,12 +428,30 @@ void drawStatus() {
 // ================================
 //      PATRÓN POR DEFECTO
 // ================================
-static const uint8_t DEFAULT_PATTERN[ROWS][COLS] = {
-  { 7, 76, 72, 45 }, { 7, 75,  0,  0 }, { 1, 77,  0,  0 }, { 7, 76,  0,  0 },
-  { 4, 75, 72,  0 }, { 7, 77,  0,  0 }, { 1, 76,  0,  0 }, { 7, 75,  0,  0 },
-  { 5, 77, 76, 45 }, { 7, 76,  0,  0 }, { 1, 75,  0,  0 }, { 7,  0,  0,  0 },
-  { 7, 81, 77,  0 }, { 7,  0,  0,  0 }, { 1,  0,  0,  0 }, { 7,  0,  0,  0 },
+static const uint8_t DEFAULT_PATTERN[][COLS] = {
+{ 12,  72,  64,  60 },  // 0  - Do5 + Mi4 + Do4 (Antes 48)
+  {  0,   0,   0,   0 },  // 1
+  { 12,  76,  67,   0 },  // 2
+  {  0,   0,   0,   0 },  // 3
+  { 12,  79,  72,  55 },  // 4  - Sol5 + Do5 + Sol3 (Antes 43)
+  {  0,   0,   0,   0 },  // 5
+  { 12,  84,  76,   0 },  // 6
+  {  0,   0,   0,   0 },  // 7
+
+  // --- Baja ---
+  { 12,  79,  72,  60 },  // 8  - Sol5 + Do5 + Do4 (Antes 48)
+  {  0,   0,   0,   0 },  // 9
+  { 12,  76,  67,   0 },  // 10
+  {  0,   0,   0,   0 },  // 11
+  { 12,  72,  64,  55 },  // 12 - Do5 + Mi4 + Sol3 (Antes 43)
+  {  0,   0,   0,   0 },  // 13
+  
+  // --- Cierre ---
+  {  0,   0,   0,  60 },  // 14 - Cierre en Do4 (Antes 48)
+  {  0,   0,   0,   0 },  // 15
 };
+
+constexpr int PATTERN_ROWS = sizeof(DEFAULT_PATTERN) / sizeof(DEFAULT_PATTERN[0]);
 
 // ================================
 //     ENCODERS (lectura)
@@ -471,20 +496,6 @@ bool readEncButton(EncState& st, int pinSW) {
 // ================================
 //        WIFI / MQTT helpers
 // ================================
-const char* stateName(SystemState s) {
-  switch (s) {
-    case IDLE:     return "IDLE";
-    case EDIT:     return "EDIT";
-    case PLAY_ALL: return "PLAY_ALL";
-    case PLAY_LINE:return "PLAY_LINE";
-    default:       return "UNKNOWN";
-  }
-}
-
-void mqttPublishState() {
-  mqttClient.publish(TOPIC_STATUS, stateName(gState));
-}
-
 void connectWiFi() {
   Serial.println("Conectando WiFi...");
   WiFi.mode(WIFI_STA);
@@ -579,29 +590,17 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   for (unsigned int i=0;i<length;i++) msg += (char)payload[i];
   Serial.printf("MQTT [%s]: %s\n", topic, msg.c_str());
 
+  if (!queueEvents) return;
+
   if (strcmp(topic, TOPIC_STATE) == 0) {
-    if (msg == "PLAY_ALL") {
-      RUN_SEQUENCER = true;
-      gState = PLAY_ALL;
-      drawStatus();
-      mqttPublishState();
-    } else if (msg == "IDLE") {
-      RUN_SEQUENCER = false;
-      gState = IDLE;
-      sq1.setFreq(0); sq2.setFreq(0); tri.setFreq(0); envNoise = 0.0f;
-      drawStatus();
-      mqttPublishState();
-    } else if (msg == "EDIT") {
-      gState = EDIT;
-      drawStatus();
-      mqttPublishState();
-    } else if (msg == "PLAY_LINE") {
-      gState = PLAY_LINE;
-      triggerStep(selectedRow);
-      previewActive = true;
-      previewSamplesLeft = samplesPerStep;
-      drawStatus();
-      mqttPublishState();
+    Event ev = EV_NONE;
+    if (msg == "PLAY_ALL")       ev = EV_MQTT_TO_PLAY_ALL;
+    else if (msg == "IDLE")      ev = EV_MQTT_TO_IDLE;
+    else if (msg == "EDIT")      ev = EV_MQTT_TO_EDIT;
+    else if (msg == "PLAY_LINE") ev = EV_MQTT_TO_PLAY_LINE;
+
+    if (ev != EV_NONE) {
+      xQueueSend(queueEvents, &ev, 0);
     }
   }
   else if (strcmp(topic, TOPIC_TEMPO) == 0) {
@@ -614,6 +613,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       s.trim(); isMs = true;
     }
     val = s.toInt();
+
     int newBpm = BPM;
     if (isMs) {
       newBpm = bpmFromMs(val);
@@ -621,10 +621,11 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       if (val >= BPM_MIN && val <= BPM_MAX) newBpm = val;
       else if (val >= 40 && val <= 1000)   newBpm = bpmFromMs(val);
     }
+
     if (newBpm != BPM) {
-      BPM = newBpm;
-      recalcSamplesPerStep();
-      drawStatus();
+      gMqttTempoBpm = newBpm;
+      Event ev = EV_MQTT_TEMPO_SET;
+      xQueueSend(queueEvents, &ev, 0);
     }
   }
   else if (strcmp(topic, TOPIC_EDIT) == 0) {
@@ -635,36 +636,26 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         else      v = constrain(v, 0, 127);
         matrixVals[r][c] = v;
         if (r>=scrollIndex && r<scrollIndex+VISIBLE_ROWS) {
-          drawMatrixRow(r, (gState==IDLE||gState==PLAY_ALL)?(r==selectedRow):false);
-          drawEditCursor(true);
+          redrawVisibleWindow();
         }
       }
     }
   }
   else if (strcmp(topic, TOPIC_PLAY_ROW) == 0) {
-    // Payload = número de fila a reproducir (0..ROWS-1)
     int r = msg.toInt();
     if (r >= 0 && r < ROWS) {
-      selectedRow = r;
-
-      // Asegurar que la fila quede visible
-      if (selectedRow < scrollIndex) {
-        scrollIndex = selectedRow;
-      }
-      if (selectedRow >= scrollIndex + VISIBLE_ROWS) {
-        scrollIndex = selectedRow - (VISIBLE_ROWS - 1);
-      }
-
-      redrawVisibleWindow(false);
-
-      // Entrar en modo PLAY_LINE (one-shot) igual que con el botón
-      gState = PLAY_LINE;
-      triggerStep(selectedRow);
-      previewActive = true;
-      previewSamplesLeft = samplesPerStep;
-
-      drawStatus();
-      mqttPublishState();
+      gMqttPlayRow = r;
+      Event ev = EV_MQTT_PLAY_ROW;
+      xQueueSend(queueEvents, &ev, 0);
+    }
+  }
+  else if (strcmp(topic, TOPIC_GET_CELL) == 0) {
+    int r, c;
+    if (sscanf(msg.c_str(), "%d %d", &r, &c) == 2) {
+      gMqttQueryRow = r;
+      gMqttQueryCol = c;
+      Event ev = EV_MQTT_QUERY_CELL;
+      xQueueSend(queueEvents, &ev, 0);
     }
   }
 }
@@ -679,125 +670,14 @@ void connectMQTT() {
       mqttClient.subscribe(TOPIC_STATE);
       mqttClient.subscribe(TOPIC_TEMPO);
       mqttClient.subscribe(TOPIC_EDIT);
-      mqttClient.subscribe(TOPIC_PLAY_ROW);   // nuevo topic
-      mqttPublishState();
+      mqttClient.subscribe(TOPIC_PLAY_ROW);
+      mqttClient.subscribe(TOPIC_GET_CELL);
+      mqttClient.publish(TOPIC_STATUS, "IDLE");
     } else {
       Serial.print("rc=");
       Serial.println(mqttClient.state());
       vTaskDelay(pdMS_TO_TICKS(1500));
     }
-  }
-}
-
-// ================================
-//      HANDLERS LÓGICOS
-// ================================
-void handleEnc2Delta(int d2) {
-  if (gState == EDIT || gState == PLAY_LINE) {
-    int prevCol = selectedCol;
-    selectedCol = constrain(selectedCol + d2, 0, COLS); // 0..COLS (BPM virtual)
-    if (selectedCol != prevCol) {
-      drawMatrixRow(selectedRow, false);
-      redrawVisibleWindow(false);
-      drawStatus();
-    }
-  }
-}
-
-void handleEnc2Button() {
-  if (gState == EDIT || gState == PLAY_LINE) {
-    if (gState == PLAY_LINE) {
-      previewActive = false;
-      previewSamplesLeft = 0;
-    }
-    gState = IDLE;
-    sq1.setFreq(0); sq2.setFreq(0); tri.setFreq(0); envNoise = 0.0f;
-    redrawVisibleWindow(false);
-    drawStatus();
-    mqttPublishState();
-  } else {
-    gState = EDIT;
-    if (selectedRow < scrollIndex) scrollIndex = selectedRow;
-    if (selectedRow >= scrollIndex + VISIBLE_ROWS)
-      scrollIndex = selectedRow - (VISIBLE_ROWS - 1);
-    redrawVisibleWindow(false);
-    drawStatus();
-    mqttPublishState();
-  }
-}
-
-void handleEnc1Delta(int d1) {
-  if (gState == IDLE || gState == PLAY_ALL) {
-    int prev = selectedRow;
-    selectedRow = constrain(selectedRow + d1, 0, ROWS - 1);
-    int oldScroll = scrollIndex;
-    if (selectedRow < scrollIndex) scrollIndex = selectedRow;
-    if (selectedRow >= scrollIndex + VISIBLE_ROWS)
-      scrollIndex = selectedRow - (VISIBLE_ROWS - 1);
-
-    if (scrollIndex != oldScroll) {
-      redrawVisibleWindow(gState == PLAY_ALL);
-    } else {
-      updateHighlight(prev, selectedRow, gState == PLAY_ALL);
-      drawScrollBar();
-    }
-    drawStatus();
-  } else if (gState == EDIT || gState == PLAY_LINE) {
-    if (selectedCol == COLS) {  // BPM
-      int prevBpm = BPM;
-      BPM = constrain(BPM + d1 * BPM_STEP, BPM_MIN, BPM_MAX);
-      if (BPM != prevBpm) {
-        recalcSamplesPerStep();
-        drawStatus();
-        drawBpmCursor(true);
-      }
-    } else {
-      int prevVal = matrixVals[selectedRow][selectedCol];
-      if (selectedCol == 0) {
-        matrixVals[selectedRow][0] = constrain(prevVal + d1, 0, 15);
-      } else {
-        matrixVals[selectedRow][selectedCol] =
-            constrain(prevVal + d1, 0, 127);
-      }
-      drawMatrixRow(selectedRow, false);
-      drawEditCursor(true);
-      drawStatus();
-    }
-  }
-}
-
-void handleEnc1Button() {
-  if (gState == IDLE) {
-    RUN_SEQUENCER = !RUN_SEQUENCER;
-    gState = RUN_SEQUENCER ? PLAY_ALL : IDLE;
-    drawStatus();
-    mqttPublishState();
-  } else if (gState == EDIT) {
-    previewActive = !previewActive;
-    if (previewActive) {
-      gState = PLAY_LINE;
-      triggerStep(selectedRow);
-      previewSamplesLeft = samplesPerStep;
-    } else {
-      gState = EDIT;
-      sq1.setFreq(0); sq2.setFreq(0); tri.setFreq(0); envNoise = 0.0f;
-      previewSamplesLeft = 0;
-    }
-    drawStatus();
-    mqttPublishState();
-  } else if (gState == PLAY_ALL) {
-    RUN_SEQUENCER = false;
-    gState = IDLE;
-    sq1.setFreq(0); sq2.setFreq(0); tri.setFreq(0); envNoise = 0.0f;
-    drawStatus();
-    mqttPublishState();
-  } else if (gState == PLAY_LINE) {
-    previewActive = false;
-    gState = EDIT;
-    sq1.setFreq(0); sq2.setFreq(0); tri.setFreq(0); envNoise = 0.0f;
-    previewSamplesLeft = 0;
-    drawStatus();
-    mqttPublishState();
   }
 }
 
@@ -847,14 +727,21 @@ void vMqttTask(void *pvParameters) {
 }
 
 // ================================
-//           SETUP / LOOP
+//           SETUP
 // ================================
 void setup() {
   Serial.begin(115200);
 
-  for (int r = 0; r < ROWS; ++r)
-    for (int c = 0; c < COLS; ++c)
-      matrixVals[r][c] = DEFAULT_PATTERN[r][c];
+  // Inicializar matriz desde DEFAULT_PATTERN y rellenar con ceros si sobra
+  for (int r = 0; r < ROWS; ++r) {
+    for (int c = 0; c < COLS; ++c) {
+      if (r < PATTERN_ROWS) {
+        matrixVals[r][c] = DEFAULT_PATTERN[r][c];
+      } else {
+        matrixVals[r][c] = 0;
+      }
+    }
+  }
 
   pinMode(ENC1_CLK, INPUT_PULLUP);
   pinMode(ENC1_DT , INPUT_PULLUP);
@@ -885,8 +772,10 @@ void setup() {
   tft.init();
   tft.setRotation(1);
   drawHeader();
-  redrawVisibleWindow(false);
-  drawStatus();
+  gUiEditMode    = false;
+  gHighlightStep = false;
+  redrawVisibleWindow();
+  drawStatus("IDLE");
 
   i2sInit();
   nNoise.setShort(true);
@@ -909,93 +798,455 @@ void setup() {
   );
 }
 
+// ================================
+//             LOOP
+// ================================
 void loop() {
   static int16_t buf[AUDIO_FRAMES * 2];
   static int stepCounter = 0;
 
-  if (queueEvents) {
-    Event ev;
-    while (xQueueReceive(queueEvents, &ev, 0) == pdTRUE) {
-      switch (ev) {
-        case EV_ENC1_CW:   handleEnc1Delta(+1); break;
-        case EV_ENC1_CCW:  handleEnc1Delta(-1); break;
-        case EV_ENC2_CW:   handleEnc2Delta(+1); break;
-        case EV_ENC2_CCW:  handleEnc2Delta(-1); break;
-        case EV_ENC1_PRESS:handleEnc1Button();  break;
-        case EV_ENC2_PRESS:handleEnc2Button();  break;
-      }
+  // Estados SOLO acá adentro
+  enum SystemState : uint8_t { IDLE=0, EDIT=1, PLAY_ALL=2, PLAY_LINE=3 };
+  static SystemState state = IDLE;
+  static const char* STATE_LABELS[] = { "IDLE", "EDIT", "PLAY_ALL", "PLAY_LINE" };
+
+  auto publishState = [&]() {
+    mqttClient.publish(TOPIC_STATUS, STATE_LABELS[(int)state]);
+  };
+
+  auto stopVoices = [&]() {
+    sq1.setFreq(0); sq2.setFreq(0); tri.setFreq(0);
+    envNoise = 0.0f;
+  };
+
+  auto ensureRowVisible = [&]() {
+    int oldScroll = scrollIndex;
+    if (selectedRow < scrollIndex) scrollIndex = selectedRow;
+    if (selectedRow >= scrollIndex + VISIBLE_ROWS)
+      scrollIndex = selectedRow - (VISIBLE_ROWS - 1);
+    if (scrollIndex != oldScroll) {
+      redrawVisibleWindow();
+    } else {
+      redrawVisibleWindow();
     }
-  }
+  };
 
-  for (size_t i = 0; i < AUDIO_FRAMES; ++i) {
-    float mix = 0.0f;
+  auto moveSelectedRow = [&](int delta) {
+    int prev = selectedRow;
+    selectedRow = constrain(selectedRow + delta, 0, ROWS - 1);
+    int oldScroll = scrollIndex;
+    if (selectedRow < scrollIndex) scrollIndex = selectedRow;
+    if (selectedRow >= scrollIndex + VISIBLE_ROWS)
+      scrollIndex = selectedRow - (VISIBLE_ROWS - 1);
+    if (scrollIndex != oldScroll) {
+      redrawVisibleWindow();
+    } else {
+      updateHighlight(prev, selectedRow);
+      drawScrollBar();
+    }
+    drawStatus(STATE_LABELS[(int)state]);
+  };
 
-    if (gState == PLAY_ALL && RUN_SEQUENCER) {
-      float nN = nNoise.tick();
-      float mixDrums = nN * envNoise * GAIN_NOISE * MASTER_DRUMS;
-      envNoise *= DECAY_NOISE;
-      float s1  = sq1.tick();
-      float s2  = sq2.tick();
-      float t   = tri.tick();
-      float mixSynth = (s1 + s2 + t) * MASTER_SYNTH;
-      mix = mixDrums + mixSynth;
+  auto moveSelectedCol = [&](int delta) {
+    int prevCol = selectedCol;
+    selectedCol = constrain(selectedCol + delta, 0, COLS); // COLS = BPM virtual
+    if (selectedCol != prevCol) {
+      redrawVisibleWindow();
+      drawStatus(STATE_LABELS[(int)state]);
+    }
+  };
+
+  auto applyTempoChange = [&]() {
+    BPM = constrain(gMqttTempoBpm, BPM_MIN, BPM_MAX);
+    recalcSamplesPerStep();
+    drawStatus(STATE_LABELS[(int)state]);
+  };
+
+  auto publishCellValue = [&]() {
+    int r = gMqttQueryRow;
+    int c = gMqttQueryCol;
+    if (r >= 0 && r < ROWS && c >= 0 && c < COLS) {
+      int v = matrixVals[r][c];
+      String resp = String(v);        // 👉 solo el valor
+      mqttClient.publish(TOPIC_CELL_VAL, resp.c_str());
+    }
+  };
+
+  // Helper común para editar valores/BPM
+  auto applyEnc1DeltaEditMode = [&](int d1) {
+    if (selectedCol == COLS) {
+      int prevBpm = BPM;
+      BPM = constrain(BPM + d1 * BPM_STEP, BPM_MIN, BPM_MAX);
+      if (BPM != prevBpm) {
+        recalcSamplesPerStep();
+        drawStatus(STATE_LABELS[(int)state]);
+        drawBpmCursor(true);
+      }
+    } else {
+      int prevVal = matrixVals[selectedRow][selectedCol];
+      if (selectedCol == 0) {
+        matrixVals[selectedRow][0] = constrain(prevVal + d1, 0, 15);
+      } else {
+        matrixVals[selectedRow][selectedCol] =
+            constrain(prevVal + d1, 0, 127);
+      }
+      drawMatrixRow(selectedRow, false);
+      drawEditCursor(true);
+      drawStatus(STATE_LABELS[(int)state]);
+    }
+  };
+
+  auto startPlayAll = [&]() {
+    state           = PLAY_ALL;
+    gUiEditMode     = false;
+    gHighlightStep  = true;
+    redrawVisibleWindow();
+    drawStatus(STATE_LABELS[(int)state]);
+    publishState();
+  };
+
+  auto stopPlayAllToIdle = [&]() {
+    state           = IDLE;
+    gUiEditMode     = false;
+    gHighlightStep  = false;
+    stopVoices();
+    redrawVisibleWindow();
+    drawStatus(STATE_LABELS[(int)state]);
+    publishState();
+  };
+
+  auto enterEdit = [&]() {
+    state           = EDIT;
+    gUiEditMode     = true;
+    gHighlightStep  = false;
+    ensureRowVisible();
+    redrawVisibleWindow();
+    drawStatus(STATE_LABELS[(int)state]);
+    publishState();
+  };
+
+  auto goIdleFromEditOrPlayLine = [&]() {
+    state           = IDLE;
+    gUiEditMode     = false;
+    gHighlightStep  = false;
+    stopVoices();
+    redrawVisibleWindow();
+    drawStatus(STATE_LABELS[(int)state]);
+    publishState();
+  };
+
+  auto startPlayLine = [&]() {
+    state           = PLAY_LINE;
+    gUiEditMode     = true;
+    gHighlightStep  = false;
+    triggerStep(selectedRow);
+    previewSamplesLeft = samplesPerStep;
+    redrawVisibleWindow();
+    drawStatus(STATE_LABELS[(int)state]);
+    publishState();
+  };
+
+  auto stopPlayLineToEdit = [&]() {
+    previewSamplesLeft = 0;
+    stopVoices();
+    state           = EDIT;
+    gUiEditMode     = true;
+    gHighlightStep  = false;
+    redrawVisibleWindow();
+    drawStatus(STATE_LABELS[(int)state]);
+    publishState();
+  };
+
+  auto playRowFromMqtt = [&]() {
+    selectedRow = gMqttPlayRow;
+    ensureRowVisible();
+    startPlayLine();
+  };
+
+  // 🎵 Helpers de audio para no repetir código
+  auto synthFrame = [&]() -> float {
+    float nN        = nNoise.tick();
+    float mixDrums  = nN * envNoise * GAIN_NOISE * MASTER_DRUMS;
+    envNoise       *= DECAY_NOISE;
+
+    float s1        = sq1.tick();
+    float s2        = sq2.tick();
+    float t         = tri.tick();
+    float mixSynth  = (s1 + s2 + t) * MASTER_SYNTH;
+
+    return mixDrums + mixSynth;
+  };
+
+  auto renderSilence = [&]() {
+    for (size_t i = 0; i < AUDIO_FRAMES; ++i) {
+      int16_t y = 0;
+      buf[2*i+0] = y;
+      buf[2*i+1] = y;
+    }
+  };
+
+  auto renderPlayAll = [&]() {
+    for (size_t i = 0; i < AUDIO_FRAMES; ++i) {
+      float mix = synthFrame();
 
       if (++stepCounter >= samplesPerStep) {
         stepCounter = 0;
         int prevStep = step;
         step = (step + 1) % STEPS;
         triggerStep(step);
+
         int oldScroll = scrollIndex;
         if (step < scrollIndex) scrollIndex = step;
-        if (step >= scrollIndex + VISIBLE_ROWS) scrollIndex = step - (VISIBLE_ROWS - 1);
+        if (step >= scrollIndex + VISIBLE_ROWS)
+          scrollIndex = step - (VISIBLE_ROWS - 1);
+
         if (scrollIndex != oldScroll) {
-          redrawVisibleWindow(true);
+          redrawVisibleWindow();
         } else {
-          updateHighlight(prevStep, step, true);
+          updateHighlight(prevStep, step);
           drawScrollBar();
         }
-        drawStatus();
+        drawStatus(STATE_LABELS[(int)state]);
       }
-    } else if (gState == PLAY_LINE && previewActive) {
-      float nN = nNoise.tick();
-      float mixDrums = nN * envNoise * GAIN_NOISE * MASTER_DRUMS;
-      envNoise *= DECAY_NOISE;
 
-      float s1  = sq1.tick();
-      float s2  = sq2.tick();
-      float t   = tri.tick();
-      float mixSynth = (s1 + s2 + t) * MASTER_SYNTH;
+      if (mix > 1.0f) mix = 1.0f;
+      if (mix < -1.0f) mix = -1.0f;
+      int16_t y = (int16_t)(mix * 32767.0f);
+      buf[2*i+0] = y;
+      buf[2*i+1] = y;
+    }
+  };
 
-      mix = mixDrums + mixSynth;
+  auto renderPlayLine = [&]() {
+    for (size_t i = 0; i < AUDIO_FRAMES; ++i) {
+      float mix = synthFrame();
 
-      if (--previewSamplesLeft <= 0) {
-        previewActive = false;
-        gState = EDIT;
-        sq1.setFreq(0); sq2.setFreq(0); tri.setFreq(0); envNoise = 0.0f;
-        drawStatus();
-        mqttPublishState();
+      if (previewSamplesLeft > 0) {
+        previewSamplesLeft--;
+        if (previewSamplesLeft == 0) {
+          // cuando termina la duración volvemos a EDIT
+          stopPlayLineToEdit();
+        }
       }
-    } else {
-      mix = 0.0f;
+
+      if (mix > 1.0f) mix = 1.0f;
+      if (mix < -1.0f) mix = -1.0f;
+      int16_t y = (int16_t)(mix * 32767.0f);
+      buf[2*i+0] = y;
+      buf[2*i+1] = y;
+    }
+  };
+
+  // 🔻 ÚNICO switch(state) del loop: maneja eventos + audio
+  switch (state) {
+    case IDLE: {
+      // --- Eventos ---
+      if (queueEvents) {
+        Event ev;
+        while (xQueueReceive(queueEvents, &ev, 0) == pdTRUE) {
+          switch (ev) {
+            case EV_ENC1_CW:   moveSelectedRow(+1); break;
+            case EV_ENC1_CCW:  moveSelectedRow(-1); break;
+
+            case EV_ENC1_PRESS:
+              startPlayAll();                      // IDLE -> PLAY_ALL
+              break;
+
+            case EV_ENC2_PRESS:
+              enterEdit();                         // IDLE -> EDIT
+              break;
+
+            case EV_MQTT_TO_PLAY_ALL:
+              startPlayAll();
+              break;
+            case EV_MQTT_TO_IDLE:
+              stopPlayAllToIdle();
+              break;
+            case EV_MQTT_TO_EDIT:
+              enterEdit();
+              break;
+            case EV_MQTT_TO_PLAY_LINE:
+              startPlayLine();
+              break;
+            case EV_MQTT_PLAY_ROW:
+              playRowFromMqtt();
+              break;
+            case EV_MQTT_TEMPO_SET:
+              applyTempoChange();
+              break;
+            case EV_MQTT_QUERY_CELL:
+              publishCellValue();
+              break;
+
+            default:
+              break;
+          }
+        }
+      }
+
+      // --- Audio: silencio ---
+      renderSilence();
+      break;
     }
 
-    if (mix > 1.0f) mix = 1.0f;
-    if (mix < -1.0f) mix = -1.0f;
-    int16_t y = (int16_t)(mix * 32767.0f);
-    buf[2*i+0] = y;
-    buf[2*i+1] = y;
+    case EDIT: {
+      // --- Eventos ---
+      if (queueEvents) {
+        Event ev;
+        while (xQueueReceive(queueEvents, &ev, 0) == pdTRUE) {
+          switch (ev) {
+            case EV_ENC1_CW:  applyEnc1DeltaEditMode(+1); break;
+            case EV_ENC1_CCW: applyEnc1DeltaEditMode(-1); break;
+
+            case EV_ENC2_CW:  moveSelectedCol(+1); break;
+            case EV_ENC2_CCW: moveSelectedCol(-1); break;
+
+            case EV_ENC1_PRESS:
+              // siempre iniciar preescucha
+              startPlayLine();
+              break;
+
+            case EV_ENC2_PRESS:
+              goIdleFromEditOrPlayLine();
+              break;
+
+            case EV_MQTT_TO_IDLE:
+              stopPlayAllToIdle();
+              break;
+            case EV_MQTT_TO_EDIT:
+              enterEdit();
+              break;
+            case EV_MQTT_TO_PLAY_ALL:
+              startPlayAll();
+              break;
+            case EV_MQTT_TO_PLAY_LINE:
+              startPlayLine();
+              break;
+            case EV_MQTT_PLAY_ROW:
+              playRowFromMqtt();
+              break;
+            case EV_MQTT_TEMPO_SET:
+              applyTempoChange();
+              break;
+            case EV_MQTT_QUERY_CELL:
+              publishCellValue();
+              break;
+
+            default:
+              break;
+          }
+        }
+      }
+
+      // --- Audio: silencio ---
+      renderSilence();
+      break;
+    }
+
+    case PLAY_ALL: {
+      // --- Eventos ---
+      if (queueEvents) {
+        Event ev;
+        while (xQueueReceive(queueEvents, &ev, 0) == pdTRUE) {
+          switch (ev) {
+            case EV_ENC1_CW:   moveSelectedRow(+1); break;
+            case EV_ENC1_CCW:  moveSelectedRow(-1); break;
+
+            case EV_ENC1_PRESS:
+              stopPlayAllToIdle();                 // PLAY_ALL -> IDLE
+              break;
+
+            case EV_ENC2_PRESS:
+              enterEdit();                         // PLAY_ALL -> EDIT
+              break;
+
+            case EV_MQTT_TO_IDLE:
+              stopPlayAllToIdle();
+              break;
+            case EV_MQTT_TO_PLAY_ALL:
+              startPlayAll();
+              break;
+            case EV_MQTT_TO_EDIT:
+              enterEdit();
+              break;
+            case EV_MQTT_TO_PLAY_LINE:
+              startPlayLine();
+              break;
+            case EV_MQTT_PLAY_ROW:
+              playRowFromMqtt();
+              break;
+            case EV_MQTT_TEMPO_SET:
+              applyTempoChange();
+              break;
+            case EV_MQTT_QUERY_CELL:
+              publishCellValue();
+              break;
+
+            default:
+              break;
+          }
+        }
+      }
+
+      // --- Audio: secuenciador completo ---
+      renderPlayAll();
+      break;
+    }
+
+    case PLAY_LINE: {
+      // --- Eventos ---
+      if (queueEvents) {
+        Event ev;
+        while (xQueueReceive(queueEvents, &ev, 0) == pdTRUE) {
+          switch (ev) {
+            case EV_ENC1_CW:  applyEnc1DeltaEditMode(+1); break;
+            case EV_ENC1_CCW: applyEnc1DeltaEditMode(-1); break;
+
+            case EV_ENC2_CW:  moveSelectedCol(+1); break;
+            case EV_ENC2_CCW: moveSelectedCol(-1); break;
+
+            case EV_ENC1_PRESS:
+              // cortar preescucha y volver a EDIT
+              stopPlayLineToEdit();
+              break;
+
+            case EV_ENC2_PRESS:
+              goIdleFromEditOrPlayLine();
+              break;
+
+            case EV_MQTT_TO_IDLE:
+              stopPlayAllToIdle();
+              break;
+            case EV_MQTT_TO_EDIT:
+              enterEdit();
+              break;
+            case EV_MQTT_TO_PLAY_ALL:
+              startPlayAll();
+              break;
+            case EV_MQTT_TO_PLAY_LINE:
+              startPlayLine();
+              break;
+            case EV_MQTT_PLAY_ROW:
+              playRowFromMqtt();
+              break;
+            case EV_MQTT_TEMPO_SET:
+              applyTempoChange();
+              break;
+            case EV_MQTT_QUERY_CELL:
+              publishCellValue();
+              break;
+
+            default:
+              break;
+          }
+        }
+      }
+
+      // --- Audio: preescucha de línea ---
+      renderPlayLine();
+      break;
+    }
   }
+
   i2sWriteStereoSamples(buf, AUDIO_FRAMES);
-
-  while (Serial.available()) {
-    char c = Serial.read();
-    if (c == 'w' && scrollIndex > 0) {
-      scrollIndex--;
-      redrawVisibleWindow(gState==PLAY_ALL);
-    }
-    if (c == 's' && scrollIndex < ROWS - VISIBLE_ROWS) {
-      scrollIndex++;
-      redrawVisibleWindow(gState==PLAY_ALL);
-    }
-  }
 }
