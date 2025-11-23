@@ -5,6 +5,10 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.os.Bundle;
 import android.view.View;
 import android.widget.Button;
@@ -13,12 +17,12 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import androidx.appcompat.app.AppCompatActivity; // Es importante usar AppCompatActivity
+import androidx.appcompat.app.AppCompatActivity;
 
 import org.json.JSONException;
 import org.json.JSONObject;
 
-public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnCellEditListener {
+public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnCellEditListener, SensorEventListener {
 
     // --- Matriz y sus dimensiones ---
     private static final int ROWS = 16;
@@ -35,6 +39,7 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
     private TextView txtPhoneState;
     // --- Botones Menú Principal (Idle) ---
     private Button cmdEditar;
+    private Button cmdStop;
     private Button cmdReproducir;
     private LinearLayout menuPrincipalLayout;
     // --- Botones Menú Edición ---
@@ -59,6 +64,18 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
     private final ConnectionLost connectionLost = new ConnectionLost();
     // --------------------------------
 
+    // --- Sensor (Giroscopio) ---
+    private SensorManager sensorManager;
+    private Sensor gyroscope;
+    private Sensor accelerometer;
+    private long lastSensorUpdateTime = 0; // To limit update rate
+    // ----------------------------
+
+    // --- Shake Detection ---
+    private float lastX, lastY, lastZ;
+    private static final int SHAKE_THRESHOLD = 800; // Adjust this for sensitivity
+    private boolean firstShakeSample = true;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -73,6 +90,7 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
 
         // Vistas del menú principal
         cmdEditar = findViewById(R.id.cmdEditar);
+        cmdStop = findViewById(R.id.cmdStop);
         cmdReproducir = findViewById(R.id.cmdReproducir);
         menuPrincipalLayout = findViewById(R.id.menuPrincipalLayout); // Asume que tienes un LinearLayout con este ID
 
@@ -85,11 +103,22 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
 
         // --- Configuración de Listeners ---
         cmdEditar.setOnClickListener(botonesListeners);
+        cmdStop.setOnClickListener(botonesListeners);
         cmdReproducir.setOnClickListener(botonesListeners);
         cmdPlayRow.setOnClickListener(botonesListeners);
         cmdSave.setOnClickListener(botonesListeners);
         cmdBackToMenu.setOnClickListener(botonesListeners);
         // ----------------------------------
+
+        // --- NEW: Inicialización del Sensor Manager ---
+        sensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
+        if (sensorManager != null) {
+            gyroscope = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
+            accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER); // <-- GET THE SENSOR
+            if (accelerometer == null) {
+                Toast.makeText(this, "Acelerómetro no encontrado. No se podrá agitar para reproducir.", Toast.LENGTH_LONG).show();
+            }
+        }
 
         // --- Lógica de la Matriz ---
         initializeMatrix(); // Llena la matriz con ceros
@@ -210,12 +239,13 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
                 if (selectedRow != -1 && selectedCol != -1) {
                     setPhoneState(AppState.EDITING); // <-- USE THE METHOD
                     matrixAdapter.setEditing(true);
-                    publishMessage(ConfigMQTT.topicState, "Edit");
                 } else {
                     Toast.makeText(MainActivity.this, "Por favor, seleccione una celda primero", Toast.LENGTH_SHORT).show();
                 }
-        } else if (view.getId() == R.id.cmdReproducir) {
+            } else if (view.getId() == R.id.cmdReproducir) {
                 publishMessage(ConfigMQTT.topicState, "PlayAll");
+            } else if (view.getId() == R.id.cmdStop) {
+                publishMessage(ConfigMQTT.topicState, "Idle");
             }
 
             // --- Lógica del Menú de Edición ---
@@ -226,16 +256,14 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
             } else if (view.getId() == R.id.cmdSave) {
                 if (selectedRow != -1 && selectedCol != -1) {
                     int valueToSave = matrixVals[selectedRow][selectedCol];
-                    JSONObject payload = new JSONObject();
                     try {
-                        payload.put("row", selectedRow);
-                        payload.put("col", selectedCol);
-                        payload.put("value", valueToSave);
                         // Publicamos el mensaje en el tópico dedicado a la matriz
-                        publishMessage(ConfigMQTT.topicEdit, payload.toString());
-                    } catch (JSONException e) {
+                        publishMessage(ConfigMQTT.topicEdit, String.valueOf(selectedRow) + " "
+                                + String.valueOf(selectedCol) + " "
+                                + String.valueOf(valueToSave));
+                    } catch (Exception e) {
                         e.printStackTrace();
-                        Toast.makeText(MainActivity.this, "Error al crear JSON para guardar", Toast.LENGTH_SHORT).show();
+                        Toast.makeText(MainActivity.this, "Error al enviar el mensaje", Toast.LENGTH_SHORT).show();
                     }
                 }
             } else if (view.getId() == R.id.cmdBackToMenu) {
@@ -289,9 +317,148 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
         currentState = newState;
         if (newState == AppState.IDLE) {
             txtPhoneState.setText("Estado App: Idle");
-        } else {
+            // --- STOP listening to the gyroscope to save battery ---
+            if (gyroscope != null) {
+                sensorManager.unregisterListener(this, gyroscope);
+            }
+        } else { // EDITING
             txtPhoneState.setText("Estado App: Editando");
+            // --- START listening to the gyroscope ---
+            if (gyroscope != null) {
+                // SENSOR_DELAY_UI is a good rate for UI updates
+                sensorManager.registerListener(this, gyroscope, SensorManager.SENSOR_DELAY_UI);
+            } else {
+                Toast.makeText(this, "Giroscopio no encontrado", Toast.LENGTH_SHORT).show();
+            }
         }
         updateUIVisibility(); // This will handle showing/hiding menus
+    }
+    // Accelerometer Methods
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // Register the accelerometer to listen for shakes
+        if (accelerometer != null) {
+            sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_NORMAL);
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        // Always unregister listeners when the activity is not visible
+        sensorManager.unregisterListener(this);
+    }
+    //---------------------------------------------------
+
+    @Override
+    public void onAccuracyChanged(Sensor sensor, int accuracy) {
+        // This method is part of the SensorEventListener interface.
+        // You can leave it empty if you don't need to handle accuracy changes.
+    }
+
+    @Override
+    public void onSensorChanged(SensorEvent event) {
+        // Nos aseguramos de que el evento es del giroscopio y estamos en modo EDITING
+        if (event.sensor.getType() == Sensor.TYPE_GYROSCOPE && currentState == AppState.EDITING) {
+
+            // --- Control para limitar la tasa de actualización ---
+            long currentTime = System.currentTimeMillis();
+            if ((currentTime - lastSensorUpdateTime) < 200) { // Actualiza cada 200ms
+                return;
+            }
+            lastSensorUpdateTime = currentTime;
+            // ---------------------------------------------------
+
+            // El giroscopio mide la velocidad de rotación en rad/s en los ejes x, y, z.
+            // Usaremos el eje Y (giro del teléfono a izquierda/derecha).
+            float rotationY = event.values[1];
+
+            // Definimos un umbral para ignorar pequeños movimientos involuntarios
+            float threshold = 0.8f;
+
+            if (rotationY > threshold) { // Giro a la derecha -> Aumentar valor
+                incrementCellValue();
+            } else if (rotationY < -threshold) { // Giro a la izquierda -> Disminuir valor
+                decrementCellValue();
+            }
+        }
+
+        // --- Shake detection logic ---
+        if (event.sensor.getType() == Sensor.TYPE_ACCELEROMETER) {
+            long currentTime = System.currentTimeMillis();
+            // Only check for shakes every 100ms
+            if ((currentTime - lastSensorUpdateTime) > 100) {
+                long timeDiff = (currentTime - lastSensorUpdateTime);
+                lastSensorUpdateTime = currentTime;
+
+                float x = event.values[0];
+                float y = event.values[1];
+                float z = event.values[2];
+
+                if (firstShakeSample) {
+                    lastX = x;
+                    lastY = y;
+                    lastZ = z;
+                    firstShakeSample = false;
+                } else {
+                    float speed = Math.abs(x + y + z - lastX - lastY - lastZ) / timeDiff * 10000;
+
+                    if (speed > SHAKE_THRESHOLD) {
+                        // --- SHAKE DETECTED! ---
+                        // Only play if we are in IDLE mode to avoid conflicts
+                        if (currentState == AppState.IDLE) {
+                            Toast.makeText(this, "¡Shake detectado! Reproduciendo...", Toast.LENGTH_SHORT).show();
+                            publishMessage(ConfigMQTT.topicState, "PlayAll");
+                            // Reset the time to avoid multiple triggers from one shake
+                            lastSensorUpdateTime = currentTime + 1000; // Add a 1-second cooldown
+                        }
+                    }
+                    lastX = x;
+                    lastY = y;
+                    lastZ = z;
+                }
+            }
+        }
+    }
+
+    // --- Helper methods for changing cell value ---
+
+    private void incrementCellValue() {
+        if (selectedRow == -1 || selectedCol == -1) return;
+
+        int currentValue = matrixVals[selectedRow][selectedCol];
+        int newValue = currentValue + 1;
+
+        // Validar segun la columna (0-15 para col 0, 0-127 para las demás)
+        int maxValue = (selectedCol == 0) ? 15 : 127;
+
+        if (newValue > maxValue) {
+            newValue = maxValue; // No pasar del máximo
+        }
+
+        updateCellValue(newValue);
+    }
+
+    private void decrementCellValue() {
+        if (selectedRow == -1 || selectedCol == -1) return;
+
+        int currentValue = matrixVals[selectedRow][selectedCol];
+        int newValue = currentValue - 1;
+
+        if (newValue < 0) {
+            newValue = 0; // No bajar de cero
+        }
+
+        updateCellValue(newValue);
+    }
+
+    private void updateCellValue(int newValue) {
+        // Actualizamos el modelo de datos
+        matrixVals[selectedRow][selectedCol] = newValue;
+        // Notificamos al adapter para que refresque la vista de la matriz
+        matrixAdapter.notifyDataSetChanged();
+        // Opcional: Mostrar el nuevo valor en el txtJson
+        txtJson.setText("Valor cambiado por giroscopio: " + newValue);
     }
 }
