@@ -14,7 +14,6 @@ public class HelpActivity extends AppCompatActivity {
             getSupportActionBar().setDisplayHomeAsUpEnabled(true); // muestra back arrow
         }
     }
-
     @Override
     public boolean onSupportNavigateUp() {
         finish();

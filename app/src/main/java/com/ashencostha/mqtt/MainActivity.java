@@ -63,6 +63,8 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
     private Button cmdSaveSong;
     private Button cmdOpenLibrary;
 
+    private Button cmdGoHome; // botón que vuelve a la SplashActivity
+
     private LinearLayout menuPrincipalLayout;
     // --- Botones Menú Edición ---
     private Button cmdPlayRow;
@@ -105,6 +107,9 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        if (getSupportActionBar() != null) {
+            getSupportActionBar().setDisplayHomeAsUpEnabled(true); // muestra back arrow
+        }
 
 
         // --- Vinculación de Vistas ---
@@ -120,6 +125,8 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
         cmdStop = findViewById(R.id.cmdStop);
         cmdReproducir = findViewById(R.id.cmdReproducir);
         menuPrincipalLayout = findViewById(R.id.menuPrincipalLayout); // Asume que tienes un LinearLayout con este ID
+
+
 
         // Vistas del menú de edición
         cmdPlayRow = findViewById(R.id.cmdPlayRow); // Asume que tienes este botón en tu layout
@@ -167,6 +174,29 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
         connect();
         // -------------------------------------------------
     }
+
+    @Override
+    public boolean onSupportNavigateUp() {
+        // Mantenemos finish() para la flechita de la ActionBar
+        onBackPressed(); // delegamos en onBackPressed para tener comportamiento consistente
+        return true;
+    }
+
+    @Override
+    public void onBackPressed() {
+        // Si MainActivity es la raíz de la tarea, abrimos SplashActivity
+        if (isTaskRoot()) {
+            Intent intent = new Intent(MainActivity.this, SplashActivity.class);
+            // Evita crear múltiples instancias y limpia la posible pila intermedia
+            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            startActivity(intent);
+            finish();
+        } else {
+            // Si no es la raíz, mantenemos el comportamiento por defecto (volver a la actividad anterior)
+            super.onBackPressed();
+        }
+    }
+
 
     /**
      * Actualiza la visibilidad de los menús según el estado actual de la app.

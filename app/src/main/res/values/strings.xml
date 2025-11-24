@@ -4,12 +4,11 @@
     <string name="btn_start">Comenzar</string>
     <string name="btn_help">Ayuda</string>
     <string name="help_content">
-    1. Pulsa "Comenzar" para acceder a la aplicación principal.\n
-    2. En la pantalla principal puedes editar la matriz y usar los botones "Editar" y "Reproducir".\n
+    1. Pulsa play para acceder a la aplicación principal.\n
+    2. Alli puedes editar la matriz y usar los botones "Editar" y "Reproducir".\n
     3. La app publica mensajes MQTT cuando editas celdas o pulsas acciones (Edit / PlayAll).\n
     4. Asegúrate de que la configuración MQTT (servidor, usuario, contraseña) esté correcta.\n
     5. Si se pierde la conexión, la app intentará reconectar automáticamente.\n
-    6. Para más ayuda revisa la documentación o contacta al desarrollador.
 </string>
     <string name="help_title">Ayuda</string>
     <string name="help_intro_title">Introducción</string>
@@ -22,4 +21,6 @@
     <string name="help_footer">Versión 1.0 • Ashencostha</string>
     <string name="copied">Texto copiado al portapapeles</string>
     <string name="share_via">Compartir vía</string>
+    <string name="library">Library</string>
+    <string name="como">Como funciona nuestra aplicacion?</string>
 </resources>

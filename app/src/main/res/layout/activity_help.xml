@@ -32,7 +32,7 @@
         android:id="@+id/tvHelpTitle"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:text="Como funciona nuestra aplicacion?"
+        android:text="@string/como"
         android:textSize="30sp"
         android:textStyle="bold"
         app:layout_constraintTop_toTopOf="parent"

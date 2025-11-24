@@ -18,23 +18,21 @@ public class SplashActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_splash);
 
-        // Ocultar action bar si existe
         if (getSupportActionBar() != null) {
-            getSupportActionBar().hide();
+            getSupportActionBar().setDisplayHomeAsUpEnabled(true); // muestra back arrow
         }
 
         // Referencias
         btnComenzar = findViewById(R.id.btnComenzar);
         btnAyuda = findViewById(R.id.btnAyuda);
 
-        // Asegurarnos de que el botón esté visualmente por encima (Z)
-        // esto ayuda cuando overlays o ImageView interfieren con toques
         btnComenzar.bringToFront();
         btnComenzar.setClickable(true);
         btnComenzar.setFocusable(true);
 
         // Listener botón comenzar (con toast de debug)
         btnComenzar.setOnClickListener(v -> {
+            Toast.makeText(SplashActivity.this, "Vamos!", Toast.LENGTH_SHORT).show();
             startActivity(new Intent(SplashActivity.this, MainActivity.class));
             finish();
         });
@@ -43,5 +41,11 @@ public class SplashActivity extends AppCompatActivity {
         btnAyuda.setOnClickListener(v ->
                 startActivity(new Intent(SplashActivity.this, HelpActivity.class))
         );
+
+        Button cmdExit = findViewById(R.id.cmdExit);
+        cmdExit.setOnClickListener(v -> {
+            finishAffinity();     // Cierra todas las actividades
+            System.exit(0);       // Mata el proceso (opcional, pero efectivo)
+        });
     }
 }
