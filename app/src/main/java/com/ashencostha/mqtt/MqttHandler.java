@@ -45,9 +45,6 @@ public class MqttHandler implements MqttCallback {
             options.setUserName(username);
             options.setPassword(password.toCharArray());
 
-
-            ///////////////////////////////////
-            // Set up the persistence layer
             MemoryPersistence persistence = new MemoryPersistence();
 
             client = new MqttClient(brokerUrl, clientId, persistence);

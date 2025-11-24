@@ -69,7 +69,6 @@ public class MatrixAdapter extends BaseAdapter {
 
         if (convertView == null) {
             LayoutInflater inflater = (LayoutInflater) context.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
-            // We use the grid_item.xml layout here
             convertView = inflater.inflate(R.layout.grid_item, parent, false);
             holder = new ViewHolder((EditText) convertView);
             convertView.setTag(holder);
@@ -81,7 +80,6 @@ public class MatrixAdapter extends BaseAdapter {
         final int row = position / numCols;
         final int col = position % numCols;
 
-        // Temporarily remove the watcher to prevent loops while setting text
         holder.editText.removeTextChangedListener(holder.textWatcher);
         holder.editText.setText(String.valueOf(matrix[row][col]));
         holder.textWatcher.updatePosition(row, col);
@@ -89,24 +87,19 @@ public class MatrixAdapter extends BaseAdapter {
 
         boolean isTheSelectedCell = (row == selectedRow && col == selectedCol);
 
-        // --- CORRECTED LOGIC ---
         if (isEditing && isTheSelectedCell) {
-            // EDIT MODE for THIS CELL
             holder.editText.setFocusable(true);
-            holder.editText.setFocusableInTouchMode(true); // Allows touch to focus
+            holder.editText.setFocusableInTouchMode(true);
             holder.editText.setBackgroundColor(Color.YELLOW);
-            holder.editText.requestFocus(); // Pop up the keyboard
+            holder.editText.requestFocus();
         } else {
-            // IDLE MODE or NOT THE SELECTED CELL
             holder.editText.setFocusable(false);
-            holder.editText.setFocusableInTouchMode(false); // Prevents touch from starting edit
+            holder.editText.setFocusableInTouchMode(false);
             holder.editText.setBackgroundColor(isTheSelectedCell ? Color.CYAN : Color.LTGRAY);
         }
 
-        // --- CLICK LISTENER to enable cell selection ---
         holder.editText.setOnClickListener(v -> {
             if (listener != null) {
-                // Always notify MainActivity when a cell is tapped
                 listener.onCellEdited(row, col, matrix[row][col]);
             }
         });
@@ -141,7 +134,6 @@ public class MatrixAdapter extends BaseAdapter {
 
         @Override
         public void afterTextChanged(Editable s) {
-            // Only update if we are in edit mode for this specific cell
             if (isEditing && row == selectedRow && col == selectedCol) {
                 try {
                     int newValue = s.length() > 0 ? Integer.parseInt(s.toString()) : 0;
@@ -157,7 +149,6 @@ public class MatrixAdapter extends BaseAdapter {
                     if (matrix[row][col] != newValue) {
                         matrix[row][col] = newValue;
                         if (listener != null) {
-                            // Inform MainActivity of the new value
                             listener.onCellEdited(row, col, newValue);
                         }
                     }

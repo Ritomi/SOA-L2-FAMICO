@@ -69,9 +69,9 @@ public class SavedSongsActivity extends AppCompatActivity {
             public void onClick(View v) {
                 if (selectedSong != null) {
                     Intent resultIntent = new Intent();
-                    resultIntent.putExtra("loadedSong", selectedSong); // Pass the whole Song object
+                    resultIntent.putExtra("loadedSong", selectedSong);
                     setResult(RESULT_OK, resultIntent);
-                    finish(); // Close this activity and return to MainActivity
+                    finish();
                 } else {
                     Toast.makeText(SavedSongsActivity.this, "Por favor, seleccione una canción para cargar", Toast.LENGTH_SHORT).show();
                 }
@@ -98,7 +98,7 @@ public class SavedSongsActivity extends AppCompatActivity {
         songList = gson.fromJson(json, type);
 
         if (songList == null) {
-            songList = new ArrayList<>(); // If no songs are saved, create an empty list
+            songList = new ArrayList<>();
         }
     }
 
@@ -118,9 +118,9 @@ public class SavedSongsActivity extends AppCompatActivity {
                 .setPositiveButton("Borrar", new DialogInterface.OnClickListener() {
                     public void onClick(DialogInterface dialog, int which) {
                         songList.remove(selectedSong);
-                        songAdapter.notifyDataSetChanged(); // Update the UI
-                        saveSongsToPrefs(); // Save the change
-                        selectedSong = null; // Deselect
+                        songAdapter.notifyDataSetChanged();
+                        saveSongsToPrefs();
+                        selectedSong = null;
                         songsListView.clearChoices();
                         Toast.makeText(SavedSongsActivity.this, "Canción borrada", Toast.LENGTH_SHORT).show();
                     }

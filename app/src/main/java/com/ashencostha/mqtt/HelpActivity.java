@@ -11,7 +11,7 @@ public class HelpActivity extends AppCompatActivity {
         setContentView(R.layout.activity_help);
 
         if (getSupportActionBar() != null) {
-            getSupportActionBar().setDisplayHomeAsUpEnabled(true); // muestra back arrow
+            getSupportActionBar().setDisplayHomeAsUpEnabled(true);
         }
     }
     @Override
