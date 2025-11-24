@@ -10,7 +10,6 @@ import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.ListView;
 import android.widget.Toast;
-import android.widget.ArrayAdapter;
 
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
@@ -55,7 +54,6 @@ public class SavedSongsActivity extends AppCompatActivity {
             @Override
             public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
                 selectedSong = songList.get(position);
-                Toast.makeText(SavedSongsActivity.this, selectedSong.getName() + " seleccionado", Toast.LENGTH_SHORT).show();
             }
         });
 

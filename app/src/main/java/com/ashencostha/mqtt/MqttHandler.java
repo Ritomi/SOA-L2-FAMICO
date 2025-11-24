@@ -85,6 +85,17 @@ public class MqttHandler implements MqttCallback {
         }
     }
 
+    public void unsubscribe(final String topic) {
+        try {
+            client.unsubscribe(topic);
+            Log.d("MqttHandler", "Unsubscribed from topic: " + topic);
+        } catch (MqttException e) {
+            e.printStackTrace();
+            Log.e("MqttHandler", "Exception while unsubscribing from topic: " + topic, e);
+        }
+    }
+
+
     @Override
     public void connectionLost(Throwable cause) {
         Log.d("MAIN ACTIVITY","conexion perdida"+ cause.getMessage().toString());
@@ -92,7 +103,6 @@ public class MqttHandler implements MqttCallback {
         Intent i = new Intent(ACTION_CONNECTION_LOST);
         mContext.sendBroadcast(i);
     }
-
 
     @Override
     /*ESTE METODO SE EJECUTA EN UN THREAD SECUNDARIO, POR LO QUE NO PUEDE
@@ -111,9 +121,6 @@ public class MqttHandler implements MqttCallback {
         i.putExtra("msgJson", msgJson);
 
         mContext.sendBroadcast(i);
-
-
-        
     }
 
     @Override

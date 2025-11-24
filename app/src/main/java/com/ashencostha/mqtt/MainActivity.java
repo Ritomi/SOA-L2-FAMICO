@@ -22,24 +22,13 @@ import android.widget.Toast;
 // New Songs Library Imports
 import android.content.DialogInterface;
 import android.text.InputType;
-import android.widget.EditText;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AlertDialog;
 import com.google.gson.Gson;
-import com.google.gson.reflect.TypeToken;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
 
-
-import androidx.annotation.Nullable;
-import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
-
-import org.json.JSONException;
-import org.json.JSONObject;
-
-import java.lang.reflect.Type;
-import java.util.ArrayList;
 
 public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnCellEditListener, SensorEventListener {
 
@@ -49,6 +38,8 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
     private int[][] matrixVals = new int[ROWS][COLS];
     // ---------------------------------
 
+    private static final int LOAD_SONG_REQUEST_CODE = 1;
+
     // --- Componentes de la UI ---
     private GridView matrixGridView;
     private MatrixAdapter matrixAdapter;
@@ -56,16 +47,18 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
     private TextView txtStatus;
     private TextView txtEspStatus;
     private TextView txtPhoneState;
+    // ------------------------------
     // --- Botones Menú Principal (Idle) ---
     private Button cmdEditar;
     private Button cmdStop;
     private Button cmdReproducir;
     private Button cmdSaveSong;
     private Button cmdOpenLibrary;
-
-    private Button cmdGoHome; // botón que vuelve a la SplashActivity
-
+    private Button cmdSync;
+    private Button cmdGoHome;
     private LinearLayout menuPrincipalLayout;
+    // ----------------------------
+
     // --- Botones Menú Edición ---
     private Button cmdPlayRow;
     private Button cmdSave;
@@ -73,8 +66,15 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
     private LinearLayout menuEdicionLayout;
     // ----------------------------
 
+    // --- Botones Menú Sincronizacion ---
+    private Button cmdSyncBack;
+    private Button cmdSendMatrix;
+    private Button cmdReceiveMatrix;
+    private LinearLayout menuSyncLayout;
+    // ----------------------------
+
     // --- Gestión de Estado y Selección ---
-    private enum AppState { IDLE, EDITING }
+    private enum AppState { IDLE, EDITING, SYNC }
     private AppState currentState = AppState.IDLE;
     private int selectedRow = -1;
     private int selectedCol = -1;
@@ -92,23 +92,21 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
     private SensorManager sensorManager;
     private Sensor gyroscope;
     private Sensor accelerometer;
-    private long lastSensorUpdateTime = 0; // To limit update rate
+    private long lastSensorUpdateTime = 0;
     // ----------------------------
 
     // --- Shake Detection ---
     private float lastX, lastY, lastZ;
-    private static final int SHAKE_THRESHOLD = 800; // Adjust this for sensitivity
+    private static final int SHAKE_THRESHOLD = 800;
     private boolean firstShakeSample = true;
     // ----------------------------
-
-    private static final int LOAD_SONG_REQUEST_CODE = 1;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         if (getSupportActionBar() != null) {
-            getSupportActionBar().setDisplayHomeAsUpEnabled(true); // muestra back arrow
+            getSupportActionBar().setDisplayHomeAsUpEnabled(true);
         }
 
 
@@ -117,6 +115,7 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
         txtEspStatus = findViewById(R.id.txtEspStatus);
         txtPhoneState = findViewById(R.id.txtPhoneState);
         matrixGridView = findViewById(R.id.matrixGridView);
+        // ------------------------------
 
         // Vistas del menú principal
         cmdSaveSong = findViewById(R.id.cmdSaveSong);
@@ -124,15 +123,22 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
         cmdEditar = findViewById(R.id.cmdEditar);
         cmdStop = findViewById(R.id.cmdStop);
         cmdReproducir = findViewById(R.id.cmdReproducir);
-        menuPrincipalLayout = findViewById(R.id.menuPrincipalLayout); // Asume que tienes un LinearLayout con este ID
-
-
+        cmdSync = findViewById(R.id.cmdSync);
+        menuPrincipalLayout = findViewById(R.id.menuPrincipalLayout);
+        // ------------------------------
 
         // Vistas del menú de edición
-        cmdPlayRow = findViewById(R.id.cmdPlayRow); // Asume que tienes este botón en tu layout
-        cmdSave = findViewById(R.id.cmdSave);         // Asume que tienes este botón en tu layout
-        cmdBackToMenu = findViewById(R.id.cmdBackToMenu); // Asume que tienes este botón en tu layout
-        menuEdicionLayout = findViewById(R.id.menuEdicionLayout); // Asume que tienes un LinearLayout con este ID
+        cmdPlayRow = findViewById(R.id.cmdPlayRow);
+        cmdSave = findViewById(R.id.cmdSave);
+        cmdBackToMenu = findViewById(R.id.cmdBackToMenu);
+        menuEdicionLayout = findViewById(R.id.menuEdicionLayout);
+        // ------------------------------
+
+        // Vistas del menú de sincronización
+        cmdSyncBack = findViewById(R.id.cmdSyncBack);
+        cmdSendMatrix = findViewById(R.id.cmdSendMatrix);
+        cmdReceiveMatrix = findViewById(R.id.cmdReceiveMatrix);
+        menuSyncLayout = findViewById(R.id.menuSyncLayout);
         // ------------------------------
 
         // --- Configuración de Listeners ---
@@ -144,21 +150,24 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
         cmdPlayRow.setOnClickListener(botonesListeners);
         cmdSave.setOnClickListener(botonesListeners);
         cmdBackToMenu.setOnClickListener(botonesListeners);
+        cmdSync.setOnClickListener(botonesListeners);
+        cmdSyncBack.setOnClickListener(botonesListeners);
+        cmdSendMatrix.setOnClickListener(botonesListeners);
+        cmdReceiveMatrix.setOnClickListener(botonesListeners);
         // ----------------------------------
 
         // --- NEW: Inicialización del Sensor Manager ---
         sensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
         if (sensorManager != null) {
             gyroscope = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
-            accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER); // <-- GET THE SENSOR
+            accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
             if (accelerometer == null) {
                 Toast.makeText(this, "Acelerómetro no encontrado. No se podrá agitar para reproducir.", Toast.LENGTH_LONG).show();
             }
         }
 
         // --- Lógica de la Matriz ---
-        initializeMatrix(); // Llena la matriz con ceros
-        // Se crea el adapter, pasando 'this' como el listener para que la actividad reciba los eventos
+        initializeMatrix();
         matrixAdapter = new MatrixAdapter(this, matrixVals, this);
         matrixGridView.setAdapter(matrixAdapter);
         // ---------------------------
@@ -177,63 +186,48 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
 
     @Override
     public boolean onSupportNavigateUp() {
-        // Mantenemos finish() para la flechita de la ActionBar
-        onBackPressed(); // delegamos en onBackPressed para tener comportamiento consistente
+        onBackPressed();
         return true;
     }
 
     @Override
     public void onBackPressed() {
-        // Si MainActivity es la raíz de la tarea, abrimos SplashActivity
         if (isTaskRoot()) {
             Intent intent = new Intent(MainActivity.this, SplashActivity.class);
-            // Evita crear múltiples instancias y limpia la posible pila intermedia
             intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
             startActivity(intent);
             finish();
         } else {
-            // Si no es la raíz, mantenemos el comportamiento por defecto (volver a la actividad anterior)
             super.onBackPressed();
         }
     }
 
-
-    /**
-     * Actualiza la visibilidad de los menús según el estado actual de la app.
-     */
     private void updateUIVisibility() {
+        menuPrincipalLayout.setVisibility(View.GONE);
+        menuEdicionLayout.setVisibility(View.GONE);
+        menuSyncLayout.setVisibility(View.GONE);
         if (currentState == AppState.IDLE) {
             menuPrincipalLayout.setVisibility(View.VISIBLE);
-            menuEdicionLayout.setVisibility(View.GONE);
-            matrixAdapter.setSelection(-1, -1); // Deseleccionar celda
+            matrixAdapter.setSelection(-1, -1);
             selectedRow = -1;
             selectedCol = -1;
-        } else { // EDITING
-            menuPrincipalLayout.setVisibility(View.GONE);
+        } else if (currentState == AppState.EDITING) {
             menuEdicionLayout.setVisibility(View.VISIBLE);
+        } else if (currentState == AppState.SYNC) {
+            menuSyncLayout.setVisibility(View.VISIBLE);
         }
     }
 
-
-    /**
-     * Este método es llamado por el Adapter cada vez que una celda es presionada.
-     * En modo IDLE, selecciona la celda.
-     * En modo EDITING, permite cambiar su valor.
-     */
     @Override
     public void onCellEdited(int row, int col, int value) {
         if (currentState == AppState.IDLE) {
-            // En modo IDLE, solo seleccionamos la celda
             selectedRow = row;
             selectedCol = col;
-            matrixAdapter.setSelection(row, col); // Resaltar la celda
+            matrixAdapter.setSelection(row, col);
             txtJson.setText("Celda (" + row + ", " + col + ") seleccionada. Presiona EDITAR.");
         }
     }
 
-    /**
-     * Rellena la matriz con valores iniciales
-     */
     private void initializeMatrix() {
         for (int i = 0; i < ROWS; i++) {
             for (int j = 0; j < COLS; j++) {
@@ -246,7 +240,6 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
         ConfigMQTT.useServerUBIDOTS();
         mqttHandler.connect(ConfigMQTT.mqttServer, ConfigMQTT.CLIENT_ID, ConfigMQTT.userName, ConfigMQTT.userPass);
 
-        // Tiempo de espera de conexion
         try {
             Thread.sleep(1000);
             subscribeToTopic(ConfigMQTT.topicStatus);
@@ -296,7 +289,7 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
         public void onClick(View view) {
             if (view.getId() == R.id.cmdEditar) {
                 if (selectedRow != -1 && selectedCol != -1) {
-                    setPhoneState(AppState.EDITING); // <-- USE THE METHOD
+                    setPhoneState(AppState.EDITING);
                     matrixAdapter.setEditing(true);
                 } else {
                     Toast.makeText(MainActivity.this, "Por favor, seleccione una celda primero", Toast.LENGTH_SHORT).show();
@@ -310,7 +303,10 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
             } else if (view.getId() == R.id.cmdOpenLibrary) {
                 Intent intent = new Intent(MainActivity.this, SavedSongsActivity.class);
                 startActivityForResult(intent, LOAD_SONG_REQUEST_CODE);
+            } else if (view.getId() == R.id.cmdSync) {
+                setPhoneState(AppState.SYNC);
             }
+            //---------------------------------------------------
 
             // --- Lógica del Menú de Edición ---
             else if (view.getId() == R.id.cmdPlayRow) {
@@ -321,7 +317,6 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
                 if (selectedRow != -1 && selectedCol != -1) {
                     int valueToSave = matrixVals[selectedRow][selectedCol];
                     try {
-                        // Publicamos el mensaje en el tópico dedicado a la matriz
                         publishMessage(ConfigMQTT.topicEdit, String.valueOf(selectedRow) + " "
                                 + String.valueOf(selectedCol) + " "
                                 + String.valueOf(valueToSave));
@@ -332,10 +327,21 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
                 }
             } else if (view.getId() == R.id.cmdBackToMenu) {
                 currentState = AppState.IDLE;
-                matrixAdapter.setEditing(false); // Deshabilita la edición en el adapter
+                matrixAdapter.setEditing(false);
                 updateUIVisibility();
                 setPhoneState(AppState.IDLE);
                 publishMessage(ConfigMQTT.topicState, "Idle");
+            }
+            //---------------------------------------------------
+
+            // --- Lógica del Menú de Sincronizacion ---
+            else if (view.getId() == R.id.cmdSyncBack) {
+                setPhoneState(AppState.IDLE);
+            } else if (view.getId() == R.id.cmdSendMatrix) {
+                sendMatrixAsString();
+            }else if (view.getId() == R.id.cmdReceiveMatrix) {
+                subscribeToTopic(ConfigMQTT.topicReceiveMatrix);
+                Toast.makeText(MainActivity.this, "Esperando matriz del ESP...", Toast.LENGTH_SHORT).show();
             }
         }
     };
@@ -355,53 +361,57 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
         public void onReceive(Context context, Intent intent) {
             if (intent != null && intent.getExtras() != null) {
                 String topic = intent.getStringExtra("topic");
-                String msgJson = intent.getStringExtra("msgJson");
+                String message = intent.getStringExtra("msgJson");
 
-                txtJson.setText(String.format("Tópico: %s, Mensaje: %s", topic, msgJson));
+                if (topic == null || message == null) {
+                    return;
+                }
+                txtJson.setText(String.format("Tópico: %s, Mensaje: %s", topic, message));
 
                 try {
-                    // Aquí procesas los mensajes que llegan
-                    if (topic != null && topic.equals(ConfigMQTT.topicStatus)) {
-                        JSONObject jsonObject = new JSONObject(msgJson);
-                        String value = jsonObject.getString("value");
-                        txtEspStatus.setText(String.format("Estado ESP: %s", value));
+                    if (topic.equals(ConfigMQTT.topicStatus)) {
+                        txtEspStatus.setText(String.format("Estado ESP: %s", message));
                     }
-                } catch (JSONException e) {
+
+                    if (topic.equals(ConfigMQTT.topicReceiveMatrix)) {
+                        if(currentState == AppState.SYNC)
+                        {
+                            updateMatrixFromString(message);
+                            mqttHandler.unsubscribe(ConfigMQTT.topicReceiveMatrix);
+                        } else {
+                            Toast.makeText(MainActivity.this, "Debe estar en la pantalla de Sincronizacion para recibir la matriz", Toast.LENGTH_SHORT).show();
+                        }
+                    }
+                } catch (Exception e) {
                     e.printStackTrace();
                 }
             }
         }
     }
 
-    /**
-     * Changes the application's internal state and updates the UI.
-     * @param newState The new state to transition to (IDLE or EDITING).
-     */
     private void setPhoneState(AppState newState) {
         currentState = newState;
         if (newState == AppState.IDLE) {
             txtPhoneState.setText("Estado App: Idle");
-            // --- STOP listening to the gyroscope to save battery ---
             if (gyroscope != null) {
                 sensorManager.unregisterListener(this, gyroscope);
             }
-        } else { // EDITING
+        } else if (newState == AppState.EDITING) {
             txtPhoneState.setText("Estado App: Editando");
-            // --- START listening to the gyroscope ---
             if (gyroscope != null) {
-                // SENSOR_DELAY_UI is a good rate for UI updates
                 sensorManager.registerListener(this, gyroscope, SensorManager.SENSOR_DELAY_UI);
             } else {
                 Toast.makeText(this, "Giroscopio no encontrado", Toast.LENGTH_SHORT).show();
             }
+        } else if (newState == AppState.SYNC) {
+            txtPhoneState.setText("Estado App: Sync");
         }
-        updateUIVisibility(); // This will handle showing/hiding menus
+        updateUIVisibility();
     }
-    // Accelerometer Methods
+    // Accelerometer Methods -----------------------------
     @Override
     protected void onResume() {
         super.onResume();
-        // Register the accelerometer to listen for shakes
         if (accelerometer != null) {
             sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_NORMAL);
         }
@@ -410,35 +420,27 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
     @Override
     protected void onPause() {
         super.onPause();
-        // Always unregister listeners when the activity is not visible
         sensorManager.unregisterListener(this);
     }
     //---------------------------------------------------
 
     @Override
     public void onAccuracyChanged(Sensor sensor, int accuracy) {
-        // This method is part of the SensorEventListener interface.
-        // You can leave it empty if you don't need to handle accuracy changes.
+        // Esta para que no de error
     }
 
     @Override
     public void onSensorChanged(SensorEvent event) {
-        // Nos aseguramos de que el evento es del giroscopio y estamos en modo EDITING
         if (event.sensor.getType() == Sensor.TYPE_GYROSCOPE && currentState == AppState.EDITING) {
 
-            // --- Control para limitar la tasa de actualización ---
             long currentTime = System.currentTimeMillis();
-            if ((currentTime - lastSensorUpdateTime) < 200) { // Actualiza cada 200ms
+            if ((currentTime - lastSensorUpdateTime) < 200) {
                 return;
             }
             lastSensorUpdateTime = currentTime;
-            // ---------------------------------------------------
 
-            // El giroscopio mide la velocidad de rotación en rad/s en los ejes x, y, z.
-            // Usaremos el eje Y (giro del teléfono a izquierda/derecha).
             float rotationY = event.values[1];
 
-            // Definimos un umbral para ignorar pequeños movimientos involuntarios
             float threshold = 0.8f;
 
             if (rotationY > threshold) { // Giro a la derecha -> Aumentar valor
@@ -448,10 +450,8 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
             }
         }
 
-        // --- Shake detection logic ---
         if (event.sensor.getType() == Sensor.TYPE_ACCELEROMETER) {
             long currentTime = System.currentTimeMillis();
-            // Only check for shakes every 100ms
             if ((currentTime - lastSensorUpdateTime) > 100) {
                 long timeDiff = (currentTime - lastSensorUpdateTime);
                 lastSensorUpdateTime = currentTime;
@@ -469,13 +469,10 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
                     float speed = Math.abs(x + y + z - lastX - lastY - lastZ) / timeDiff * 10000;
 
                     if (speed > SHAKE_THRESHOLD) {
-                        // --- SHAKE DETECTED! ---
-                        // Only play if we are in IDLE mode to avoid conflicts
                         if (currentState == AppState.IDLE) {
                             Toast.makeText(this, "¡Shake detectado! Reproduciendo...", Toast.LENGTH_SHORT).show();
                             publishMessage(ConfigMQTT.topicState, "PlayAll");
-                            // Reset the time to avoid multiple triggers from one shake
-                            lastSensorUpdateTime = currentTime + 1000; // Add a 1-second cooldown
+                            lastSensorUpdateTime = currentTime + 1000;
                         }
                     }
                     lastX = x;
@@ -486,21 +483,17 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
         }
     }
 
-    // --- Helper methods for changing cell value ---
-
+    // --- Helper methods for changing cell value by using the gyroscope ---
     private void incrementCellValue() {
         if (selectedRow == -1 || selectedCol == -1) return;
 
         int currentValue = matrixVals[selectedRow][selectedCol];
         int newValue = currentValue + 1;
-
-        // Validar segun la columna (0-15 para col 0, 0-127 para las demás)
         int maxValue = (selectedCol == 0) ? 15 : 127;
 
         if (newValue > maxValue) {
-            newValue = maxValue; // No pasar del máximo
+            newValue = maxValue;
         }
-
         updateCellValue(newValue);
     }
 
@@ -511,32 +504,29 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
         int newValue = currentValue - 1;
 
         if (newValue < 0) {
-            newValue = 0; // No bajar de cero
+            newValue = 0;
         }
 
         updateCellValue(newValue);
     }
 
     private void updateCellValue(int newValue) {
-        // Actualizamos el modelo de datos
         matrixVals[selectedRow][selectedCol] = newValue;
-        // Notificamos al adapter para que refresque la vista de la matriz
         matrixAdapter.notifyDataSetChanged();
-        // Opcional: Mostrar el nuevo valor en el txtJson
         txtJson.setText("Valor cambiado por giroscopio: " + newValue);
     }
+    //---------------------------------------------------
 
+    // --- Helper methods for saving songs ---
     private void showSaveSongDialog() {
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
         builder.setTitle("Guardar Canción");
 
-        // Set up the input
         final EditText input = new EditText(this);
         input.setInputType(InputType.TYPE_CLASS_TEXT);
         input.setHint("Nombre de la canción");
         builder.setView(input);
 
-        // Set up the buttons
         builder.setPositiveButton("Guardar", new DialogInterface.OnClickListener() {
             @Override
             public void onClick(DialogInterface dialog, int which) {
@@ -587,7 +577,6 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
         Toast.makeText(this, "Canción '" + name + "' guardada.", Toast.LENGTH_SHORT).show();
     }
 
-    // This method gets the result from SavedSongsActivity
     @Override
     protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
@@ -607,4 +596,43 @@ public class MainActivity extends AppCompatActivity implements MatrixAdapter.OnC
             }
         }
     }
+    //---------------------------------------------------
+
+    // --- Helper methods for synchronizing the matrix ---
+    private void sendMatrixAsString() {
+        StringBuilder matrixString = new StringBuilder();
+        for (int i = 0; i < ROWS; i++) {
+            for (int j = 0; j < COLS; j++) {
+                matrixString.append(matrixVals[i][j]);
+                if (i < ROWS - 1 || j < COLS - 1) {
+                    matrixString.append(" ");
+                }
+            }
+        }
+        publishMessage(ConfigMQTT.topicSendMatrix, matrixString.toString());
+        Toast.makeText(this, "Matriz enviada!", Toast.LENGTH_SHORT).show();
+    }
+
+    private void updateMatrixFromString(String matrixString) {
+        String[] values = matrixString.trim().split("\\s+");
+        int valueIndex = 0;
+
+        for (int i = 0; i < ROWS; i++) {
+            for (int j = 0; j < COLS; j++) {
+                if (valueIndex < values.length) {
+                    try {
+                        matrixVals[i][j] = Integer.parseInt(values[valueIndex]);
+                        valueIndex++;
+                    } catch (NumberFormatException e) {
+                        matrixVals[i][j] = 0;
+                    }
+                } else {
+                    matrixVals[i][j] = 0;
+                }
+            }
+        }
+        matrixAdapter.notifyDataSetChanged();
+        Toast.makeText(this, "Matriz recibida y actualizada!", Toast.LENGTH_SHORT).show();
+    }
+    //---------------------------------------------------
 }

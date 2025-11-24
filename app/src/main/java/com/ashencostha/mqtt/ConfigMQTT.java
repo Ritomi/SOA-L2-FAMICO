@@ -11,6 +11,9 @@ public class ConfigMQTT {
     public static final String TOPIC_TEMPO_EMQX = "/simulator/tempo";
     public static final String TOPIC_EDIT_EMQX = "/simulator/edit";
     public static final String TOPIC_PLAY_ROW_EMQX= "/simulator/playRow";
+    public static final String TOPIC_SEND_MATRIX_EMQX= "/simulator/getcell";
+    public static final String TOPIC_RECEIVE_MATRIX_EMQX= "/simulator/cellval";
+
 
     // Servidor Ubidots
     public static final String MQTT_SERVER_UBIDOTS = "tcp://industrial.api.ubidots.com:1883";
@@ -21,6 +24,8 @@ public class ConfigMQTT {
     public static final String TOPIC_TEMPO_UBIDOTS = "/v1.6/devices/simulator/tempo";
     public static final String TOPIC_EDIT_UBIDOTS = "/v1.6/devices/simulator/edit";
     public static final String TOPIC_PLAY_ROW_UBIDOTS= "/v1.6/devices/simulator/playRow";
+    public static final String TOPIC_SEND_MATRIX_UBIDOTS= "/v1.6/devices/simulator/getcell";
+    public static final String TOPIC_RECEIVE_MATRIX_UBIDOTS= "/v1.6/devices/simulator/cellval";
 
     // Variables globales modificables
     public static String mqttServer;
@@ -31,9 +36,9 @@ public class ConfigMQTT {
     public static String topicTempo;
     public static String topicEdit;
     public static String topicPlayRow;
+    public static String topicSendMatrix;
+    public static String topicReceiveMatrix;
 
-
-    // Métodos para seleccionar EMQX
     public static void useServerEMQX() {
         mqttServer = MQTT_SERVER_EMQX;
         userName = USER_NAME_EMQX;
@@ -43,9 +48,9 @@ public class ConfigMQTT {
         topicTempo = TOPIC_TEMPO_EMQX;
         topicEdit = TOPIC_EDIT_EMQX;
         topicPlayRow = TOPIC_PLAY_ROW_EMQX;
+        topicSendMatrix = TOPIC_SEND_MATRIX_EMQX;
+        topicReceiveMatrix = TOPIC_RECEIVE_MATRIX_EMQX;
     }
-
-    // Métodos para seleccionar Ubidots
     public static void useServerUBIDOTS() {
         mqttServer = MQTT_SERVER_UBIDOTS;
         userName = USER_NAME_UBIDOTS;
@@ -55,5 +60,7 @@ public class ConfigMQTT {
         topicTempo = TOPIC_TEMPO_UBIDOTS;
         topicEdit = TOPIC_EDIT_UBIDOTS;
         topicPlayRow = TOPIC_PLAY_ROW_UBIDOTS;
+        topicSendMatrix = TOPIC_SEND_MATRIX_UBIDOTS;
+        topicReceiveMatrix = TOPIC_RECEIVE_MATRIX_UBIDOTS;
     }
 }

@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
@@ -55,7 +56,6 @@
         android:layout_marginTop="8dp" />
 
     <!-- Menú Principal (con botones en 2 filas) -->
-    <!-- Menú Principal (con botones en 2 filas) -->
     <LinearLayout
         android:id="@+id/menuPrincipalLayout"
         android:layout_width="match_parent"
@@ -101,9 +101,16 @@
             android:layout_marginTop="8dp">
 
             <Button
+                android:id="@+id/cmdSync"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Sync"/>
+
+            <Button
                 android:id="@+id/cmdSaveSong"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
                 android:text="Save" />
 
             <Button
@@ -144,5 +151,35 @@
             android:layout_marginStart="8dp"
             android:text="Play Row" />
 
+    </LinearLayout>
+
+    <!-- NEW SYNC MENU-->
+    <LinearLayout
+        android:id="@+id/menuSyncLayout"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:visibility="gone">
+
+        <Button
+            android:id="@+id/cmdSyncBack"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Volver" />
+
+        <Button
+            android:id="@+id/cmdSendMatrix"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:text="Enviar Matriz" />
+
+        <Button
+            android:id="@+id/cmdReceiveMatrix"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:text="Recibir Matriz" />
     </LinearLayout>
 </LinearLayout>
