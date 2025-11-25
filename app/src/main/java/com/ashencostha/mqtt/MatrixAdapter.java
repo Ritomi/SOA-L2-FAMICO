@@ -14,7 +14,7 @@ import android.widget.Toast;
 public class MatrixAdapter extends BaseAdapter {
 
     private final Context context;
-    private final int[][] matrix;
+    private int[][] matrix;
     private final OnCellEditListener listener;
 
     private int selectedRow = -1;
@@ -42,6 +42,11 @@ public class MatrixAdapter extends BaseAdapter {
         if (!editing) {
             setSelection(-1, -1);
         }
+        notifyDataSetChanged();
+    }
+
+    public void setMatrix(int[][] newMatrix) {
+        this.matrix = newMatrix;
         notifyDataSetChanged();
     }
 
@@ -80,6 +85,7 @@ public class MatrixAdapter extends BaseAdapter {
         final int row = position / numCols;
         final int col = position % numCols;
 
+        // Desenganchar watcher viejo antes de setText para evitar loops
         holder.editText.removeTextChangedListener(holder.textWatcher);
         holder.editText.setText(String.valueOf(matrix[row][col]));
         holder.textWatcher.updatePosition(row, col);
@@ -137,15 +143,17 @@ public class MatrixAdapter extends BaseAdapter {
             if (isEditing && row == selectedRow && col == selectedCol) {
                 try {
                     int newValue = s.length() > 0 ? Integer.parseInt(s.toString()) : 0;
-                    if(selectedCol == 0 && (newValue < 0 || newValue > 15)){
+
+                    if (col == 0 && (newValue < 0 || newValue > 15)) {
                         Toast.makeText(context, "El valor debe estar entre 0 y 15", Toast.LENGTH_SHORT).show();
                         s.replace(0, s.length(), String.valueOf(matrix[row][col]));
                         return;
-                    }else if(selectedCol > 0 && (newValue < 0 || newValue > 127)){
+                    } else if (col > 0 && (newValue < 0 || newValue > 127)) {
                         Toast.makeText(context, "El valor debe estar entre 0 y 127", Toast.LENGTH_SHORT).show();
                         s.replace(0, s.length(), String.valueOf(matrix[row][col]));
                         return;
                     }
+
                     if (matrix[row][col] != newValue) {
                         matrix[row][col] = newValue;
                         if (listener != null) {
